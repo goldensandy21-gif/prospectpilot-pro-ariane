@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: prospectpilot
+      POSTGRES_USER: prospectpilot
+      POSTGRES_PASSWORD: prospectpilot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U prospectpilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    volumes:
+      - redis_data:/data
+
+  web:
+    build: .
+    command: sh -c "python manage.py migrate --noinput && python manage.py initialize_app && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 180"
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - media_data:/app/media
+
+  worker:
+    build: .
+    command: celery -A config worker -l info --concurrency=2
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - media_data:/app/media
+
+  beat:
+    build: .
+    command: celery -A config beat -l info
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:

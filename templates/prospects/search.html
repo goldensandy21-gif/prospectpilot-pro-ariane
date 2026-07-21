@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+
+{% block title %}Recherche réelle | ProspectPilot Pro{% endblock %}
+
+{% block content %}
+<section class="page-intro search-intro">
+  <div>
+    <span class="eyebrow">API PUBLIQUE DE L’ÉTAT</span>
+    <h1>Rechercher vite, puis scanner les contacts.</h1>
+    <p>La recherche s'ouvre rapidement. Le scan email/téléphone se lance ensuite sur la page ou sur un lot, sans bloquer chaque changement de page.</p>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="search-layout">
+    <div class="form-panel">
+      <form method="get">
+        {{ form.as_p }}
+        <button class="btn btn-primary-custom">Rechercher</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Flux de travail</h2>
+      <ol>
+        <li>Choisir un code NAF, département, ville ou activité.</li>
+        <li>Lancer la recherche rapide.</li>
+        <li>Passer librement d'une page à l'autre.</li>
+        <li>Lancer un scan en arrière-plan quand tu veux vérifier les emails et téléphones.</li>
+        <li>Importer seulement les prospects exploitables.</li>
+      </ol>
+    </div>
+  </div>
+
+  {% if scan_task %}
+    <div class="panel mt-4 scan-status-panel">
+      <h2>Scan lancé en arrière-plan</h2>
+      <p>
+        Tâche {{ scan_task }}.
+        {% if scan_kind == "batch" %}
+          L’application scanne un lot de résultats et importe automatiquement ceux qui ont un email ou un téléphone.
+        {% else %}
+          L’application scanne cette page et importe automatiquement les entreprises avec email ou téléphone.
+        {% endif %}
+      </p>
+      <div class="action-row">
+        <a class="btn btn-primary-custom" href="{% url 'prospect_list' %}">Voir les prospects trouvés</a>
+        <a class="btn btn-outline-dark" href="?{{ search_query }}&page={{ values.page }}">Rafraîchir cette recherche</a>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if data %}
+    <div class="panel mt-4">
+      <div class="result-head">
+        <div>
+          {% if data.scan_mode %}
+            <h2>{{ data.total_results }} prospect(s) avec email ou téléphone</h2>
+            <p>{{ data.scanned_count }} entreprise(s) testée(s), {{ data.skipped_count }} ignorée(s) sur cette page.</p>
+            {% if data.time_limited %}
+              <p class="legal-note">Scan arrêté après {{ data.scan_seconds }} seconde(s) pour éviter une erreur serveur. Passe à la page suivante ou relance le scan.</p>
+            {% endif %}
+          {% else %}
+            <h2>{{ data.total_results }} résultat(s)</h2>
+            <p>Page {{ data.page }}/{{ data.total_pages }}</p>
+          {% endif %}
+        </div>
+
+        <div class="action-row">
+          <form method="post" action="{% url 'company_search' %}">
+            {% csrf_token %}
+            {% for k,v in values.items %}
+              <input type="hidden" name="{{ k }}" value="{{ v }}">
+            {% endfor %}
+            <button name="scan_direct_contacts" class="btn btn-outline-dark">
+              Lancer le scan en arrière-plan
+            </button>
+          </form>
+
+          {% if data.scan_mode %}
+            <a class="btn btn-outline-dark" href="?{{ search_query }}&page={{ data.page }}&raw=1">
+              Voir la liste rapide
+            </a>
+          {% endif %}
+
+          <form method="post" action="{% url 'import_all_search' %}" onsubmit="return confirm('Scanner un lot de résultats et importer uniquement les entreprises avec email ou téléphone ?');">
+            {% csrf_token %}
+            {% for k,v in values.items %}
+              {% if k != 'page' %}
+                <input type="hidden" name="{{ k }}" value="{{ v }}">
+              {% endif %}
+            {% endfor %}
+            <button class="btn btn-primary-custom">
+              Scanner un lot en arrière-plan
+            </button>
+          </form>
+        </div>
+      </div>
+
+      {% if data.scan_mode %}
+        <form method="post">
+          {% csrf_token %}
+          {% for k,v in values.items %}
+            <input type="hidden" name="{{ k }}" value="{{ v }}">
+          {% endfor %}
+
+          <div class="table-responsive">
+            <table class="table align-middle">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Entreprise</th>
+                  <th>Email</th>
+                  <th>Téléphone</th>
+                  <th>Site</th>
+                  <th>Ville</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in data.results %}
+                  <tr>
+                    <td><input type="checkbox" name="selected" value="{{ r.siret }}" checked></td>
+                    <td>
+                      <a class="company-link" href="{% url 'company_preview' r.siren %}">
+                        <strong>{{ r.name }}</strong>
+                        <small>{{ r.sector }}</small>
+                      </a>
+                    </td>
+                    <td>{{ r.best_email|default:"—" }}</td>
+                    <td>{{ r.best_phone|default:"—" }}</td>
+                    <td>
+                      {% if r.website %}
+                        <a href="{{ r.website }}" target="_blank">{{ r.website|truncatechars:38 }}</a>
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                    <td>{{ r.postal_code }} {{ r.city }}</td>
+                    <td><a class="btn btn-sm btn-outline-dark" href="{% url 'company_preview' r.siren %}">Voir</a></td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="7">Aucune entreprise avec email ou téléphone détecté sur cette page.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          {% if data.results %}
+            <button name="import" class="btn btn-primary-custom">
+              Importer les prospects cochés
+            </button>
+          {% endif %}
+        </form>
+
+        <nav>
+          <ul class="pagination flex-wrap">
+            <li class="page-item {% if not data.has_previous %}disabled{% endif %}">
+              <a class="page-link" href="?{{ search_query }}&page={{ data.previous_page }}">Page précédente</a>
+            </li>
+            {% for n in data.page_range %}
+              <li class="page-item {% if n == data.page %}active{% endif %}">
+                <a class="page-link" href="?{{ search_query }}&page={{ n }}">{{ n }}</a>
+              </li>
+            {% endfor %}
+            <li class="page-item {% if not data.has_next %}disabled{% endif %}">
+              <a class="page-link" href="?{{ search_query }}&page={{ data.next_page }}">Page suivante</a>
+            </li>
+          </ul>
+        </nav>
+      {% else %}
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead>
+              <tr>
+                <th>Entreprise</th>
+                <th>NAF</th>
+                <th>Ville</th>
+                <th>SIRET</th>
+                <th>Prospection</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in data.results %}
+                <tr>
+                  <td>
+                    <a class="company-link" href="{% url 'company_preview' r.siren %}">
+                      <strong>{{ r.name }}</strong>
+                      <small>{{ r.sector }}</small>
+                    </a>
+                  </td>
+                  <td>{{ r.naf_code }}</td>
+                  <td>{{ r.postal_code }} {{ r.city }}</td>
+                  <td>{{ r.siret }}</td>
+                  <td>
+                    {% if r.prospecting_allowed %}
+                      <span class="badge text-bg-success">Possible</span>
+                    {% else %}
+                      <span class="badge text-bg-danger">Interdite</span>
+                    {% endif %}
+                  </td>
+                  <td><a class="btn btn-sm btn-outline-dark" href="{% url 'company_preview' r.siren %}">Voir</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <nav>
+          <ul class="pagination flex-wrap">
+            <li class="page-item {% if not data.has_previous %}disabled{% endif %}">
+              <a class="page-link" href="?{{ search_query }}&page={{ data.previous_page }}">Précédent</a>
+            </li>
+            {% for n in data.page_range %}
+              <li class="page-item {% if n == data.page %}active{% endif %}">
+                <a class="page-link" href="?{{ search_query }}&page={{ n }}">{{ n }}</a>
+              </li>
+            {% endfor %}
+            <li class="page-item {% if not data.has_next %}disabled{% endif %}">
+              <a class="page-link" href="?{{ search_query }}&page={{ data.next_page }}">Suivant</a>
+            </li>
+          </ul>
+        </nav>
+      {% endif %}
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

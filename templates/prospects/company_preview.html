@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-intro">
+  <div>
+    <span class="eyebrow">FICHE PUBLIQUE</span>
+    <h1>{{ company.name }}</h1>
+    <p>{{ company.sector }} · {{ company.city }}</p>
+  </div>
+
+  <a class="btn btn-outline-dark" href="{{ company.source_url }}" target="_blank">
+    Voir dans l’Annuaire des entreprises
+  </a>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="detail-grid">
+
+    <div class="panel">
+      <h2>Informations</h2>
+
+      <dl class="data-list">
+        <div>
+          <dt>Raison sociale</dt>
+          <dd>{{ company.legal_name|default:"—" }}</dd>
+        </div>
+
+        <div>
+          <dt>Activité</dt>
+          <dd>{{ company.sector }}</dd>
+        </div>
+
+        <div>
+          <dt>Code NAF</dt>
+          <dd>{{ company.naf_code }}</dd>
+        </div>
+
+        <div>
+          <dt>Adresse</dt>
+          <dd>{{ company.address }}, {{ company.postal_code }} {{ company.city }}</dd>
+        </div>
+
+        <div>
+          <dt>SIREN</dt>
+          <dd>{{ company.siren }}</dd>
+        </div>
+
+        <div>
+          <dt>SIRET</dt>
+          <dd>{{ company.siret }}</dd>
+        </div>
+
+        <div>
+          <dt>Tranche d’effectif</dt>
+          <dd>{{ company.employee_band|default:"Non renseignée" }}</dd>
+        </div>
+
+        <div>
+          <dt>Prospection</dt>
+          <dd>
+            {% if company.prospecting_allowed %}
+              Autorisation à vérifier selon la pertinence professionnelle
+            {% else %}
+              Non autorisée
+            {% endif %}
+          </dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="panel">
+      <h2>Préqualification</h2>
+
+      {% if existing %}
+        <div class="alert alert-success">
+          Déjà présente dans Prospects.
+        </div>
+
+        <a class="btn btn-primary-custom w-100" href="{% url 'prospect_detail' existing.pk %}">
+          Ouvrir le prospect
+        </a>
+
+      {% elif rejected %}
+        <div class="alert alert-secondary">
+          Entreprise refusée : {{ rejected.reason|default:"aucun motif" }}
+        </div>
+
+      {% else %}
+
+        <form method="post" class="mb-3">
+          {% csrf_token %}
+          <button name="prequalify" class="btn btn-outline-dark w-100">
+            Tester site + email
+          </button>
+        </form>
+
+        {% if prequalification %}
+          <div class="alert {% if prequalification.direct_contact %}alert-success{% else %}alert-warning{% endif %}">
+            <p><strong>Site trouvé :</strong> {{ prequalification.website|default:"Aucun" }}</p>
+            <p><strong>Confiance :</strong> {{ prequalification.confidence }}%</p>
+            <p><strong>Pages analysées :</strong> {{ prequalification.pages_checked }}</p>
+
+            {% if prequalification.best_email %}
+              <p><strong>Email principal :</strong> {{ prequalification.best_email }}</p>
+            {% endif %}
+
+            {% if prequalification.best_phone %}
+              <p><strong>Téléphone principal :</strong> {{ prequalification.best_phone }}</p>
+            {% endif %}
+
+            {% if prequalification.best_contact_form %}
+              <p><strong>Formulaire :</strong> <a href="{{ prequalification.best_contact_form }}" target="_blank">{{ prequalification.best_contact_form }}</a></p>
+            {% endif %}
+
+            {% if not prequalification.direct_contact %}
+              <p><strong>Résultat :</strong> {{ prequalification.error }}</p>
+            {% endif %}
+          </div>
+
+          {% if prequalification.emails %}
+            <h3>Emails trouvés</h3>
+            <ul>
+              {% for email in prequalification.emails %}
+                <li>
+                  {{ email.email }}
+                  <small>({{ email.email_type }}, source :
+                    <a href="{{ email.source_url }}" target="_blank">{{ email.source_url|truncatechars:60 }}</a>)
+                  </small>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+
+          {% if prequalification.phones %}
+            <h3>Téléphones trouvés</h3>
+            <ul>
+              {% for phone in prequalification.phones %}
+                <li>
+                  {{ phone.phone }}
+                  <small>(source :
+                    <a href="{{ phone.source_url }}" target="_blank">{{ phone.source_url|truncatechars:60 }}</a>)
+                  </small>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+
+          {% if prequalification.contact_forms %}
+            <h3>Formulaires trouvés</h3>
+            <ul>
+              {% for form in prequalification.contact_forms %}
+                <li><a href="{{ form.page_url }}" target="_blank">{{ form.page_url|truncatechars:80 }}</a></li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+
+          {% if prequalification.social_links %}
+            <h3>Liens sociaux détectés</h3>
+            <ul>
+              {% for link in prequalification.social_links %}
+                <li>{{ link.platform }} — <a href="{{ link.url }}" target="_blank">{{ link.url|truncatechars:80 }}</a></li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% endif %}
+
+        <h2>Décision</h2>
+
+        <form method="post">
+          {% csrf_token %}
+
+          <button
+            name="accept"
+            class="btn btn-primary-custom w-100"
+            {% if not prequalification.direct_contact or not company.prospecting_allowed %}disabled{% endif %}
+          >
+            Accepter et ajouter à Prospects
+          </button>
+        </form>
+
+        <form method="post" action="{% url 'reject_company' company.siren %}" class="mt-3">
+          {% csrf_token %}
+          {{ reject_form.as_p }}
+          <button class="btn btn-outline-danger w-100">
+            Refuser cette entreprise
+          </button>
+        </form>
+
+      {% endif %}
+    </div>
+
+  </div>
+</section>
+{% endblock %}

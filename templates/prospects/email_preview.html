@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Aperçu e-mail | {{ prospect.name }}{% endblock %}
+
+{% block content %}
+<section class="page-intro email-preview-intro">
+  <div>
+    <span class="eyebrow">EMAIL API</span>
+    <h1>{{ prospect.name }}</h1>
+    <p>{{ subject }}</p>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="email-workbench">
+    <div class="panel email-preview-panel">
+      <div class="panel-head">
+        <div>
+          <span class="eyebrow">APERÇU SYNCHRONISÉ</span>
+          <h2>Modèle e-mail</h2>
+        </div>
+        {% if prospect.public_email %}
+          <span class="email-recipient">{{ prospect.public_email }}</span>
+        {% endif %}
+      </div>
+
+      <div class="email-subject">
+        <span>Sujet</span>
+        <strong>{{ subject }}</strong>
+      </div>
+
+      <div class="email-frame email-frame-modern">
+        {{ html|safe }}
+      </div>
+    </div>
+
+    <aside class="panel sticky-panel email-send-panel">
+      <span class="eyebrow">ENVOI</span>
+      <h2>Modifier et envoyer</h2>
+
+      {% if not prospect.public_email %}
+        <div class="task-state">Adresse e-mail manquante. Ajoute une adresse avant l'envoi.</div>
+      {% endif %}
+
+      <form method="post" action="{% url 'email_preview' prospect.pk %}" class="email-compose">
+        {% csrf_token %}
+        <div class="field-group">
+          <label for="{{ form.template.id_for_label }}">Modèle</label>
+          {{ form.template }}
+          {{ form.template.errors }}
+          <p class="legal-note">Choisis un modèle, puis charge-le pour remplacer le texte par celui du modèle.</p>
+        </div>
+        <div class="field-group">
+          <label for="{{ form.subject.id_for_label }}">Sujet</label>
+          {{ form.subject }}
+          {{ form.subject.errors }}
+        </div>
+        <div class="field-group">
+          <label for="{{ form.message.id_for_label }}">Texte envoyé</label>
+          <p class="legal-note">Ce texte alimente l'aperçu et sera enregistré dans l'historique après l'envoi.</p>
+          {{ form.message }}
+          {{ form.message.errors }}
+        </div>
+        <label class="check-row" for="{{ form.confirm_professional_relevance.id_for_label }}">
+          {{ form.confirm_professional_relevance }}
+          <span>{{ form.confirm_professional_relevance.label }}</span>
+        </label>
+        {{ form.confirm_professional_relevance.errors }}
+
+        <div class="email-compose-actions">
+          <button class="btn btn-outline-dark w-100" type="submit" name="compose_action" value="load_template">Charger ce modèle</button>
+          <button class="btn btn-outline-dark w-100" type="submit" name="compose_action" value="preview">Mettre à jour l'aperçu</button>
+          <button class="btn btn-primary-custom w-100" type="submit" formaction="{% url 'email_send' prospect.pk %}" {% if not prospect.public_email %}disabled{% endif %}>Envoyer cet e-mail</button>
+        </div>
+      </form>
+
+      <p class="legal-note">Le bandeau du thème reste fixe. Le modèle change les couleurs, l'image et le style; ton texte reste modifiable.</p>
+    </aside>
+  </div>
+</section>
+{% endblock %}

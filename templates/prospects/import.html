@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Importer des prospects | ProspectPilot Pro{% endblock %}
+
+{% block content %}
+<section class="page-intro">
+  <div>
+    <span class="eyebrow">IMPORT UTILISATEUR</span>
+    <h1>Importer CSV ou Excel</h1>
+    <p>Ajoute tes données propres, puis lance l'enrichissement multi-sources en arrière-plan.</p>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="panel">
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button class="btn btn-primary-custom">Importer</button>
+    </form>
+    <p class="legal-note mt-3">
+      Colonnes reconnues : entreprise, site web, secteur, adresse, ville, pays, email, téléphone, SIREN, SIRET, effectif.
+    </p>
+  </div>
+</section>
+{% endblock %}

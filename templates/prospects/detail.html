@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+
+{% block title %}{{ prospect.name }} | ProspectPilot Pro{% endblock %}
+
+{% block content %}
+<section class="prospect-hero">
+  <div>
+    <span class="eyebrow">{{ prospect.get_status_display }}</span>
+    <h1>{{ prospect.name }}</h1>
+    <p>{{ prospect.sector }} · {{ prospect.naf_code }} · {{ prospect.city }}</p>
+    <div class="action-row">
+      <a class="btn btn-outline-dark" href="{% url 'prospect_edit' prospect.pk %}">Modifier</a>
+      <a class="btn btn-primary-custom" href="{% url 'email_preview' prospect.pk %}">Préparer un e-mail</a>
+      {% if prospect.website %}
+        <a class="btn btn-outline-dark" href="{{ prospect.website }}" target="_blank">Voir le site</a>
+      {% endif %}
+      <form method="post" action="{% url 'discover_site' prospect.pk %}">
+        {% csrf_token %}
+        <button class="btn btn-outline-dark">Détecter le site</button>
+      </form>
+      <form method="post" action="{% url 'start_audit' prospect.pk %}">
+        {% csrf_token %}
+        <button class="btn btn-primary-custom">Audit multi-pages</button>
+      </form>
+      <form method="post" action="{% url 'start_enrichment' prospect.pk %}">
+        {% csrf_token %}
+        <button class="btn btn-outline-dark">Enrichir multi-sources</button>
+      </form>
+    </div>
+  </div>
+  <div class="priority-dial">
+    <span>PRIORITÉ</span>
+    <strong>{{ prospect.priority_score }}</strong>
+    <small>/100</small>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="score-grid">
+    <article><span>Technique</span><strong>{{ prospect.technical_score }}</strong></article>
+    <article><span>Commercial</span><strong>{{ prospect.commercial_score }}</strong></article>
+    <article><span>Adéquation</span><strong>{{ prospect.fit_score }}</strong></article>
+    <article><span>Confiance domaine</span><strong>{{ prospect.website_confidence }}</strong></article>
+  </div>
+
+  <div class="detail-grid mt-4">
+    <div>
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">CONTACTS PUBLICS</span>
+            <h2>Coordonnées exploitables</h2>
+          </div>
+        </div>
+
+        <dl class="data-list">
+          <div>
+            <dt>Email principal</dt>
+            <dd>{{ prospect.public_email|default:"—" }}</dd>
+          </div>
+          <div>
+            <dt>Téléphone principal</dt>
+            <dd>{{ prospect.public_phone|default:"—" }}</dd>
+          </div>
+        </dl>
+
+        <h3>Emails collectés</h3>
+        <ul class="issue-list">
+          {% for email in prospect.public_emails.all %}
+            <li>
+              {{ email.email }} · {{ email.get_email_type_display }}
+              {% if email.source_url %}
+                · <a href="{{ email.source_url }}" target="_blank">source</a>
+              {% endif %}
+            </li>
+          {% empty %}
+            <li>Aucun email public enregistré.</li>
+          {% endfor %}
+        </ul>
+
+        <h3>Téléphones collectés</h3>
+        <ul class="issue-list">
+          {% for phone in prospect.public_phones.all %}
+            <li>
+              {{ phone.phone }}
+              {% if phone.source_url %}
+                · <a href="{{ phone.source_url }}" target="_blank">source</a>
+              {% endif %}
+            </li>
+          {% empty %}
+            <li>Aucun téléphone public enregistré.</li>
+          {% endfor %}
+        </ul>
+
+        <h3>Formulaires et liens sociaux</h3>
+        <ul class="issue-list">
+          {% for form in prospect.contact_forms.all %}
+            <li><a href="{{ form.page_url }}" target="_blank">Formulaire de contact</a></li>
+          {% empty %}
+            <li>Aucun formulaire enregistré.</li>
+          {% endfor %}
+          {% for link in prospect.social_links.all %}
+            <li>{{ link.get_platform_display }} · <a href="{{ link.url }}" target="_blank">{{ link.url|truncatechars:70 }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <div class="panel mt-4">
+        <span class="eyebrow">CONTACTS NOMINATIFS</span>
+        <h2>Personnes détectées</h2>
+        <div class="table-responsive">
+          <table class="table small">
+            <thead><tr><th>Nom</th><th>Poste</th><th>Email</th><th>Profil</th><th>Confiance</th></tr></thead>
+            <tbody>
+              {% for person in contact_people %}
+                <tr>
+                  <td>{{ person.full_name|default:"—" }}</td>
+                  <td>{{ person.job_title|default:"—" }}</td>
+                  <td>{{ person.email|default:"—" }}</td>
+                  <td>{% if person.profile_url %}<a href="{{ person.profile_url }}" target="_blank">profil</a>{% else %}—{% endif %}</td>
+                  <td>{{ person.confidence_score }}/100</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">Aucun contact nominatif public détecté.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <span class="eyebrow">PREUVES ET SOURCES</span>
+        <h2>Données collectées</h2>
+        <div class="table-responsive">
+          <table class="table small">
+            <thead><tr><th>Donnée</th><th>Valeur</th><th>Source</th><th>Confiance</th><th>Vérification</th><th>Date</th></tr></thead>
+            <tbody>
+              {% for item in evidence_items %}
+                <tr>
+                  <td>{{ item.field_name }}</td>
+                  <td>{{ item.value|truncatechars:70 }}</td>
+                  <td>{% if item.source_url %}<a href="{{ item.source_url }}" target="_blank">{{ item.source.name|default:"source" }}</a>{% else %}{{ item.source.name|default:"—" }}{% endif %}</td>
+                  <td>{{ item.confidence_score }}/100</td>
+                  <td>{{ item.get_verification_status_display }}</td>
+                  <td>{{ item.last_checked_at|default:item.collected_at }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="6">Aucune preuve enregistrée.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Derniers enrichissements</h3>
+        <ul class="issue-list">
+          {% for run in enrichment_runs %}
+            <li>{{ run.created_at }} · {{ run.get_status_display }} · {{ run.totals }}</li>
+          {% empty %}
+            <li>Aucun enrichissement lancé.</li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">AUDIT</span>
+            <h2>Synthèse du site</h2>
+          </div>
+          {% if summary %}
+            <a href="{% url 'prospect_pdf' prospect.pk %}">Rapport PDF</a>
+          {% endif %}
+        </div>
+
+        {% if latest_run and latest_run.status != "done" %}
+          <div class="task-state">
+            État : {{ latest_run.get_status_display }}
+            {% if latest_run.error %}— {{ latest_run.error }}{% endif %}
+          </div>
+        {% endif %}
+
+        {% if summary %}
+          <div class="audit-metrics">
+            <div><span>Pages</span><strong>{{ summary.pages_crawled }}</strong></div>
+            <div><span>Performance</span><strong>{{ summary.performance_score|default:"—" }}</strong></div>
+            <div><span>SEO</span><strong>{{ summary.seo_score|default:"—" }}</strong></div>
+            <div><span>Accessibilité</span><strong>{{ summary.accessibility_score|default:"—" }}</strong></div>
+          </div>
+
+          <h3>Problèmes</h3>
+          <ul class="issue-list">
+            {% for issue in summary.issues %}
+              <li><i class="bi bi-exclamation-circle"></i>{{ issue }}</li>
+            {% empty %}
+              <li>Aucun problème majeur.</li>
+            {% endfor %}
+          </ul>
+
+          <h3>Technologies</h3>
+          <div class="chips">
+            {% for tech in summary.technologies %}
+              <span>{{ tech }}</span>
+            {% empty %}
+              <span>Non détectées</span>
+            {% endfor %}
+          </div>
+
+          <h3>Pages analysées</h3>
+          <div class="table-responsive">
+            <table class="table small">
+              <thead>
+                <tr><th>Page</th><th>Statut</th><th>Réponse</th><th>Problèmes</th></tr>
+              </thead>
+              <tbody>
+                {% for p in pages %}
+                  <tr>
+                    <td>{{ p.title|default:p.url|truncatechars:50 }}</td>
+                    <td>{{ p.http_status }}</td>
+                    <td>{{ p.response_ms }} ms</td>
+                    <td>{{ p.issues|length }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p>Aucun audit terminé.</p>
+        {% endif %}
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">WEB OUVERT</span>
+            <h2>Common Crawl</h2>
+          </div>
+          <form method="post" action="{% url 'start_commoncrawl' prospect.pk %}">
+            {% csrf_token %}
+            <button class="btn btn-outline-dark">Analyser</button>
+          </form>
+        </div>
+        {% if backlink %}
+          <p><strong>{{ backlink.capture_count }}</strong> URL(s) ou capture(s) détectée(s).</p>
+          <p class="legal-note">{{ backlink.notes }}</p>
+        {% else %}
+          <p>Aucune analyse Common Crawl.</p>
+        {% endif %}
+      </div>
+
+      <div class="panel mt-4">
+        <span class="eyebrow">DONNÉES</span>
+        <dl class="data-list">
+          <div><dt>Site</dt><dd>{{ prospect.website|default:"—" }}</dd></div>
+          <div><dt>Adresse</dt><dd>{{ prospect.address }}, {{ prospect.postal_code }} {{ prospect.city }}</dd></div>
+          <div><dt>SIREN</dt><dd>{{ prospect.siren }}</dd></div>
+          <div><dt>SIRET</dt><dd>{{ prospect.siret }}</dd></div>
+          <div><dt>Source</dt><dd><a href="{{ prospect.source_url }}" target="_blank">{{ prospect.source }}</a></dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel email-prospect-panel">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">EMAIL API</span>
+            <h2>Modèle prêt à envoyer</h2>
+          </div>
+          {% if prospect.public_email %}
+            <span class="email-recipient">{{ prospect.public_email }}</span>
+          {% endif %}
+        </div>
+        {% if not prospect.public_email %}
+          <div class="task-state">Adresse e-mail manquante. Le modèle est prêt, mais l'envoi est bloqué.</div>
+        {% endif %}
+        <div class="template-chip-list">
+          {% for tpl in email_templates %}
+            <span>{{ tpl.name }}</span>
+          {% empty %}
+            <span>Modèle par défaut</span>
+          {% endfor %}
+        </div>
+        <div class="email-subject">
+          <span>Sujet</span>
+          <strong>{{ email_subject }}</strong>
+        </div>
+        <div class="email-mini-frame">
+          {{ email_html|safe }}
+        </div>
+        <a class="btn btn-primary-custom w-100 mt-3" href="{% url 'email_preview' prospect.pk %}">Modifier et envoyer l'e-mail</a>
+        <p class="legal-note mt-3">Le prospect reste dans le CRM. La page suivante prépare l'e-mail, affiche l'aperçu, envoie et ajoute l'historique.</p>
+      </div>
+
+      <div class="panel mt-4">
+        <span class="eyebrow">HISTORIQUE E-MAILS</span>
+        <h2>Envois</h2>
+        <div class="email-history-list">
+          {% for send in email_sends %}
+            <div class="email-history-item">
+              <span>{{ send.created_at }} · {{ send.get_status_display }}{% if send.template %} · {{ send.template.name }}{% endif %}</span>
+              <strong>{{ send.subject }}</strong>
+              {% if send.error %}<span>{{ send.error }}</span>{% endif %}
+            </div>
+          {% empty %}
+            <p class="legal-note">Aucun e-mail envoyé pour ce prospect.</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <span class="eyebrow">FLUX</span>
+        <h2>CRM · Email · SMS</h2>
+        <div class="api-status-row">
+          <div><strong>CRM API</strong><span>Prospect, statut, contacts, preuves et historique.</span></div>
+          <div><strong>Email API</strong><span>Modèle, aperçu, envoi et trace d'envoi.</span></div>
+          <div><strong>SMS API</strong><span>Prévu plus tard, désactivé pour le moment.</span></div>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <span class="eyebrow">SUIVI MANUEL</span>
+        <h2>Interaction</h2>
+        {% if not prospect.prospecting_allowed %}
+          <div class="alert alert-danger">Ce prospect ne doit pas être contacté.</div>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          {{ contact_form.as_p }}
+          <button class="btn btn-outline-dark w-100" {% if not prospect.prospecting_allowed %}disabled{% endif %}>Enregistrer une interaction</button>
+        </form>
+        {% if prospect.prospecting_allowed %}
+          <form method="post" action="{% url 'mark_optout' prospect.pk %}" class="mt-3">
+            {% csrf_token %}
+            <button class="btn btn-outline-danger w-100">Enregistrer une opposition</button>
+          </form>
+        {% endif %}
+        <p class="legal-note">Cette zone sert au suivi après contact. Pour envoyer un e-mail, utilise le modèle au-dessus.</p>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

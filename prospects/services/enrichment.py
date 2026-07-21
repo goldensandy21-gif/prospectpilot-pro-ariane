@@ -1,0 +1,597 @@
+from dataclasses import dataclass, field
+import re
+from urllib.parse import urlparse
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+
+from ..models import (
+    ContactPerson,
+    EnrichmentRun,
+    EnrichmentSource,
+    Prospect,
+    ProspectEvidence,
+    PublicContactForm,
+    PublicEmail,
+    PublicPhone,
+    PublicSocialLink,
+)
+from .commoncrawl import open_web_presence
+from .crawler import crawl_site
+from .site_discovery import discover_official_site
+
+
+EMAIL_RE = re.compile(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", re.I)
+PHONE_RE = re.compile(r"(?:\+33|0)[1-9](?:[ .-]?\d{2}){4}")
+GENERIC_PREFIXES = {
+    "contact", "info", "bonjour", "commercial", "sales", "hello",
+    "support", "admin", "rh", "recrutement", "secretariat", "accueil",
+}
+FREE_EMAIL_DOMAINS = {
+    "gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com",
+    "live.com", "orange.fr", "wanadoo.fr", "free.fr", "laposte.net",
+}
+
+
+SOURCE_DEFINITIONS = {
+    "public_registry": {
+        "name": "API Recherche d'entreprises",
+        "source_type": "public_registry",
+        "requires_api_key": False,
+        "base_url": "https://recherche-entreprises.api.gouv.fr",
+        "legal_notes": "Registre public d'entreprises. Ne fournit pas d'emails personnels.",
+    },
+    "company_website": {
+        "name": "Site officiel de l'entreprise",
+        "source_type": "company_website",
+        "requires_api_key": False,
+        "legal_notes": "Pages publiques du site officiel, avec respect de robots.txt.",
+    },
+    "common_crawl": {
+        "name": "Common Crawl",
+        "source_type": "open_web",
+        "requires_api_key": False,
+        "base_url": "https://commoncrawl.org",
+        "legal_notes": "Index ouvert du web, utilisé pour indices de présence publique.",
+    },
+    "user_import": {
+        "name": "Import CSV/Excel utilisateur",
+        "source_type": "user_import",
+        "requires_api_key": False,
+        "legal_notes": "Données fournies par l'utilisateur. Leur base légale doit être vérifiée par l'utilisateur.",
+    },
+    "dropcontact": {
+        "name": "Dropcontact",
+        "source_type": "b2b_api",
+        "requires_api_key": True,
+        "api_key_env": "DROPCONTACT_API_KEY",
+        "legal_notes": "Connecteur préparé. Utiliser uniquement l'API officielle et un contrat conforme RGPD.",
+    },
+    "apollo": {
+        "name": "Apollo",
+        "source_type": "b2b_api",
+        "requires_api_key": True,
+        "api_key_env": "APOLLO_API_KEY",
+        "legal_notes": "Connecteur préparé. Utiliser uniquement l'API officielle et les usages autorisés.",
+    },
+    "kaspr": {
+        "name": "Kaspr",
+        "source_type": "b2b_api",
+        "requires_api_key": True,
+        "api_key_env": "KASPR_API_KEY",
+        "legal_notes": "Connecteur préparé. Ne pas contourner LinkedIn ni les protections d'accès.",
+    },
+    "lemlist": {
+        "name": "Lemlist",
+        "source_type": "b2b_api",
+        "requires_api_key": True,
+        "api_key_env": "LEMLIST_API_KEY",
+        "legal_notes": "Connecteur préparé pour synchronisation/campagnes selon API officielle.",
+    },
+}
+
+
+@dataclass
+class EvidenceCandidate:
+    field_name: str
+    value: str
+    value_type: str = "other"
+    confidence_score: int = 50
+    verification_status: str = "unverified"
+    source_key: str = "unknown"
+    source_url: str = ""
+    notes: str = ""
+    raw_payload: dict = field(default_factory=dict)
+
+
+def normalize_value(value):
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()[:500]
+
+
+def normalize_phone(phone):
+    return re.sub(r"[^0-9+]", "", phone or "")
+
+
+def classify_email_type(email):
+    local = (email or "").split("@", 1)[0].lower().strip()
+    if local in GENERIC_PREFIXES:
+        return "generic"
+    if "." in local or "-" in local or "_" in local:
+        return "personal"
+    return "unknown"
+
+
+def verify_email(email):
+    email = (email or "").strip().lower()
+    if not EMAIL_RE.fullmatch(email):
+        return {"status": "invalid", "confidence": 0, "email_type": "unknown"}
+
+    domain = email.split("@", 1)[1]
+    email_type = classify_email_type(email)
+    confidence = 70
+    status = "format_valid"
+
+    if email_type == "generic":
+        confidence = 78
+    elif email_type == "personal":
+        confidence = 82
+
+    if domain in FREE_EMAIL_DOMAINS:
+        confidence = min(confidence, 45)
+        status = "deliverability_unknown"
+
+    return {"status": status, "confidence": confidence, "email_type": email_type}
+
+
+def verify_phone(phone):
+    normalized = normalize_phone(phone)
+    if not normalized:
+        return {"status": "invalid", "confidence": 0}
+    if PHONE_RE.search(phone or "") or normalized.startswith("+33"):
+        return {"status": "format_valid", "confidence": 76}
+    if len(re.sub(r"\D", "", normalized)) >= 8:
+        return {"status": "deliverability_unknown", "confidence": 55}
+    return {"status": "invalid", "confidence": 20}
+
+
+def source_for(key):
+    definition = SOURCE_DEFINITIONS.get(key, {
+        "name": key,
+        "source_type": "other",
+        "requires_api_key": False,
+    })
+    source, _ = EnrichmentSource.objects.update_or_create(
+        key=key,
+        defaults={
+            "name": definition.get("name", key),
+            "source_type": definition.get("source_type", "other"),
+            "requires_api_key": definition.get("requires_api_key", False),
+            "api_key_env": definition.get("api_key_env", ""),
+            "base_url": definition.get("base_url", ""),
+            "legal_notes": definition.get("legal_notes", ""),
+            "enabled": True,
+        },
+    )
+    return source
+
+
+def split_person_from_email(email):
+    local = (email or "").split("@", 1)[0].lower()
+    if classify_email_type(email) != "personal":
+        return "", "", ""
+
+    bits = [x for x in re.split(r"[._-]+", local) if len(x) > 1]
+    if len(bits) < 2:
+        return "", "", ""
+
+    first = bits[0].capitalize()
+    last = bits[1].capitalize()
+    return first, last, f"{first} {last}"
+
+
+class PublicRegistrySource:
+    key = "public_registry"
+
+    def collect(self, prospect):
+        source_url = prospect.source_url
+        data = {
+            "name": prospect.name,
+            "legal_name": prospect.legal_name,
+            "sector": prospect.sector,
+            "naf_code": prospect.naf_code,
+            "address": prospect.address,
+            "city": prospect.city,
+            "country": prospect.country,
+            "postal_code": prospect.postal_code,
+            "siren": prospect.siren,
+            "siret": prospect.siret,
+            "employee_band": prospect.employee_band,
+        }
+        candidates = []
+        for field_name, value in data.items():
+            if value:
+                candidates.append(EvidenceCandidate(
+                    field_name=field_name,
+                    value=str(value),
+                    value_type="company" if field_name not in {"address", "city", "country", "postal_code"} else "address",
+                    confidence_score=86,
+                    verification_status="verified",
+                    source_key=self.key,
+                    source_url=source_url,
+                    raw_payload={"source_payload": prospect.source_payload},
+                ))
+        return candidates
+
+
+class CompanyWebsiteSource:
+    key = "company_website"
+
+    def collect(self, prospect):
+        candidates = []
+        website = prospect.website
+        if not website:
+            discovered = discover_official_site(
+                prospect.name,
+                prospect.city,
+                max_candidates=getattr(settings, "SEARCH_SITE_CANDIDATES", 6),
+            )
+            website = discovered.get("url", "")
+            if website:
+                candidates.append(EvidenceCandidate(
+                    field_name="website",
+                    value=website,
+                    value_type="website",
+                    confidence_score=discovered.get("confidence", 70),
+                    verification_status="verified",
+                    source_key=self.key,
+                    source_url=website,
+                    raw_payload=discovered,
+                ))
+
+        if not website:
+            return candidates
+
+        data = crawl_site(
+            website,
+            max_pages=getattr(settings, "SEARCH_SCAN_CRAWL_PAGES", 3),
+            check_broken_links=False,
+        )
+
+        for page in data.get("pages", []):
+            page_url = page.get("url", website)
+            for email in page.get("found_emails", []):
+                check = verify_email(email)
+                if check["status"] == "invalid":
+                    continue
+                candidates.append(EvidenceCandidate(
+                    field_name="email",
+                    value=email.strip().lower(),
+                    value_type="email",
+                    confidence_score=check["confidence"],
+                    verification_status=check["status"],
+                    source_key=self.key,
+                    source_url=page_url,
+                    raw_payload={"email_type": check["email_type"]},
+                ))
+
+            for phone in page.get("found_phones", []):
+                check = verify_phone(phone)
+                if check["status"] == "invalid":
+                    continue
+                candidates.append(EvidenceCandidate(
+                    field_name="phone",
+                    value=phone.strip(),
+                    value_type="phone",
+                    confidence_score=check["confidence"],
+                    verification_status=check["status"],
+                    source_key=self.key,
+                    source_url=page_url,
+                ))
+
+            for form in page.get("found_contact_forms", []):
+                form_url = form.get("page_url") or page_url
+                candidates.append(EvidenceCandidate(
+                    field_name="contact_form",
+                    value=form_url,
+                    value_type="profile",
+                    confidence_score=58,
+                    verification_status="format_valid",
+                    source_key=self.key,
+                    source_url=form_url,
+                    raw_payload=form,
+                ))
+
+            for link in page.get("found_social_links", []):
+                url = link.get("url", "")
+                if not url:
+                    continue
+                candidates.append(EvidenceCandidate(
+                    field_name=f"social_{link.get('platform', 'other')}",
+                    value=url,
+                    value_type="profile",
+                    confidence_score=62,
+                    verification_status="format_valid",
+                    source_key=self.key,
+                    source_url=page_url,
+                    raw_payload=link,
+                ))
+
+        return candidates
+
+
+class CommonCrawlSource:
+    key = "common_crawl"
+
+    def collect(self, prospect):
+        if not prospect.website:
+            return []
+        try:
+            data = open_web_presence(prospect.website)
+        except Exception:
+            return []
+        return [EvidenceCandidate(
+            field_name="open_web_presence",
+            value=str(data.get("capture_count", 0)),
+            value_type="other",
+            confidence_score=45,
+            verification_status="deliverability_unknown",
+            source_key=self.key,
+            source_url=prospect.website,
+            notes="Présence détectée dans un index web ouvert.",
+            raw_payload=data,
+        )]
+
+
+class ExternalB2BProviderSource:
+    def __init__(self, key):
+        self.key = key
+        self.definition = SOURCE_DEFINITIONS[key]
+
+    def collect(self, prospect):
+        api_key_env = self.definition.get("api_key_env", "")
+        api_key = getattr(settings, api_key_env, "") if api_key_env else ""
+        if not api_key:
+            return []
+
+        return [EvidenceCandidate(
+            field_name="external_provider_status",
+            value=f"{self.definition['name']} configuré",
+            value_type="other",
+            confidence_score=30,
+            verification_status="unverified",
+            source_key=self.key,
+            notes="Adaptateur prêt : brancher ici l'appel à l'API officielle du fournisseur selon votre contrat.",
+        )]
+
+
+SOURCE_CLASSES = {
+    "public_registry": PublicRegistrySource,
+    "company_website": CompanyWebsiteSource,
+    "common_crawl": CommonCrawlSource,
+    "dropcontact": lambda: ExternalB2BProviderSource("dropcontact"),
+    "apollo": lambda: ExternalB2BProviderSource("apollo"),
+    "kaspr": lambda: ExternalB2BProviderSource("kaspr"),
+    "lemlist": lambda: ExternalB2BProviderSource("lemlist"),
+}
+DEFAULT_SOURCE_KEYS = ["public_registry", "company_website", "common_crawl"]
+
+
+class EnrichmentEngine:
+    def __init__(self, source_keys=None):
+        self.source_keys = source_keys or DEFAULT_SOURCE_KEYS
+
+    def sources(self):
+        for key in self.source_keys:
+            factory = SOURCE_CLASSES.get(key)
+            if not factory:
+                continue
+            source_for(key)
+            yield factory()
+
+    def enrich_prospect(self, prospect, user=None):
+        run = EnrichmentRun.objects.create(
+            prospect=prospect,
+            owner=user,
+            status="running",
+            mode="prospect",
+            sources_requested=self.source_keys,
+            started_at=timezone.now(),
+        )
+        totals = {"evidence": 0, "emails": 0, "phones": 0, "contacts": 0}
+        completed = []
+
+        try:
+            for source_adapter in self.sources():
+                source = source_for(source_adapter.key)
+                for candidate in source_adapter.collect(prospect):
+                    evidence = self.store_evidence(prospect, source, candidate)
+                    if evidence:
+                        totals["evidence"] += 1
+                completed.append(source_adapter.key)
+
+            self.apply_best_values(prospect)
+            totals["emails"] = prospect.public_emails.count()
+            totals["phones"] = prospect.public_phones.count()
+            totals["contacts"] = prospect.contact_people.count()
+            run.status = "done"
+            run.sources_completed = completed
+            run.totals = totals
+            run.finished_at = timezone.now()
+            run.save(update_fields=["status", "sources_completed", "totals", "finished_at"])
+            return run
+        except Exception as exc:
+            run.status = "failed"
+            run.error = str(exc)
+            run.sources_completed = completed
+            run.finished_at = timezone.now()
+            run.save(update_fields=["status", "error", "sources_completed", "finished_at"])
+            raise
+
+    def store_evidence(self, prospect, source, candidate):
+        value = str(candidate.value or "").strip()
+        if not value:
+            return None
+
+        normalized = normalize_phone(value) if candidate.value_type == "phone" else normalize_value(value)
+        existing = ProspectEvidence.objects.filter(
+            prospect=prospect,
+            field_name=candidate.field_name,
+            normalized_value=normalized,
+        ).first()
+        now = timezone.now()
+
+        if existing and existing.confidence_score > candidate.confidence_score:
+            existing.last_checked_at = now
+            existing.save(update_fields=["last_checked_at"])
+            return existing
+
+        evidence, _ = ProspectEvidence.objects.update_or_create(
+            prospect=prospect,
+            field_name=candidate.field_name,
+            normalized_value=normalized,
+            defaults={
+                "source": source,
+                "value": value,
+                "value_type": candidate.value_type,
+                "confidence_score": candidate.confidence_score,
+                "verification_status": candidate.verification_status,
+                "source_url": candidate.source_url,
+                "notes": candidate.notes,
+                "raw_payload": candidate.raw_payload,
+                "is_current": True,
+                "last_checked_at": now,
+            },
+        )
+
+        if candidate.value_type == "email":
+            self.store_email(prospect, source, candidate, evidence)
+        elif candidate.value_type == "phone":
+            self.store_phone(prospect, source, candidate, evidence)
+        elif candidate.field_name == "contact_form":
+            PublicContactForm.objects.update_or_create(
+                prospect=prospect,
+                page_url=value,
+                form_action=candidate.raw_payload.get("form_action", ""),
+                defaults={
+                    "form_method": candidate.raw_payload.get("form_method", ""),
+                    "has_email_field": bool(candidate.raw_payload.get("has_email_field")),
+                    "has_phone_field": bool(candidate.raw_payload.get("has_phone_field")),
+                    "is_primary": not prospect.contact_forms.exists(),
+                    "is_active": True,
+                    "discovery_method": source.key,
+                },
+            )
+        elif candidate.field_name.startswith("social_"):
+            PublicSocialLink.objects.update_or_create(
+                prospect=prospect,
+                url=value,
+                defaults={
+                    "platform": candidate.raw_payload.get("platform", "other"),
+                    "source_url": candidate.source_url,
+                    "is_active": True,
+                    "discovery_method": source.key,
+                },
+            )
+
+        return evidence
+
+    def store_email(self, prospect, source, candidate, evidence):
+        email = normalize_value(candidate.value)
+        check = verify_email(email)
+        obj, created = PublicEmail.objects.update_or_create(
+            prospect=prospect,
+            email=email,
+            defaults={
+                "email_type": check["email_type"],
+                "confidence_score": max(candidate.confidence_score, check["confidence"]),
+                "verification_status": check["status"],
+                "source_name": source.name,
+                "source_url": candidate.source_url,
+                "source_type": "contact_page" if "contact" in candidate.source_url.lower() else "website",
+                "is_active": True,
+                "discovery_method": source.key,
+                "last_checked_at": timezone.now(),
+            },
+        )
+
+        best = prospect.public_emails.filter(is_primary=True).first()
+        if created or not best or obj.confidence_score >= best.confidence_score:
+            PublicEmail.objects.filter(prospect=prospect).update(is_primary=False)
+            obj.is_primary = True
+            obj.save(update_fields=["is_primary"])
+            prospect.public_email = obj.email
+            prospect.save(update_fields=["public_email", "updated_at"])
+
+        first, last, full = split_person_from_email(email)
+        if full:
+            ContactPerson.objects.update_or_create(
+                prospect=prospect,
+                email=email,
+                defaults={
+                    "source": source,
+                    "first_name": first,
+                    "last_name": last,
+                    "full_name": full,
+                    "source_url": candidate.source_url,
+                    "confidence_score": min(75, obj.confidence_score),
+                    "verification_status": obj.verification_status,
+                    "last_checked_at": timezone.now(),
+                    "raw_payload": {"inferred_from_email": True, "evidence_id": evidence.pk},
+                },
+            )
+
+    def store_phone(self, prospect, source, candidate, evidence):
+        phone = str(candidate.value).strip()
+        check = verify_phone(phone)
+        obj, created = PublicPhone.objects.update_or_create(
+            prospect=prospect,
+            phone=phone,
+            defaults={
+                "confidence_score": max(candidate.confidence_score, check["confidence"]),
+                "verification_status": check["status"],
+                "source_name": source.name,
+                "source_url": candidate.source_url,
+                "source_type": "contact_page" if "contact" in candidate.source_url.lower() else "website",
+                "is_active": True,
+                "discovery_method": source.key,
+                "last_checked_at": timezone.now(),
+            },
+        )
+
+        best = prospect.public_phones.filter(is_primary=True).first()
+        if created or not best or obj.confidence_score >= best.confidence_score:
+            PublicPhone.objects.filter(prospect=prospect).update(is_primary=False)
+            obj.is_primary = True
+            obj.save(update_fields=["is_primary"])
+            prospect.public_phone = obj.phone
+            prospect.save(update_fields=["public_phone", "updated_at"])
+
+    def apply_best_values(self, prospect):
+        writable_fields = {
+            "name", "legal_name", "sector", "naf_code", "address", "city",
+            "country", "postal_code", "employee_band", "website",
+        }
+        changed = []
+        for evidence in prospect.evidence_items.filter(is_current=True).order_by("-confidence_score"):
+            if evidence.field_name not in writable_fields:
+                continue
+            current = getattr(prospect, evidence.field_name, "")
+            if current and evidence.field_name != "website":
+                continue
+            if evidence.field_name == "website" and prospect.website_confidence > evidence.confidence_score:
+                continue
+            setattr(prospect, evidence.field_name, evidence.value)
+            changed.append(evidence.field_name)
+            if evidence.field_name == "website":
+                prospect.website_confidence = evidence.confidence_score
+                changed.append("website_confidence")
+
+        if changed:
+            changed.append("updated_at")
+            prospect.save(update_fields=list(dict.fromkeys(changed)))
+
+
+def create_external_source_records():
+    for key in SOURCE_DEFINITIONS:
+        source_for(key)

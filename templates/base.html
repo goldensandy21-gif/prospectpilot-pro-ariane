@@ -1,0 +1,32 @@
+{% load static %}
+<!doctype html><html lang="fr"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}ProspectPilot Pro{% endblock %}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" rel="stylesheet">
+<link href="{% static 'css/app.css' %}?v=20260721-flow1" rel="stylesheet">
+</head><body>
+{% if user.is_authenticated %}
+<header class="app-header"><nav class="navbar app-navbar"><div class="container-fluid px-lg-4">
+<a class="navbar-brand" href="{% url 'dashboard' %}"><span>PP</span><strong>ProspectPilot <em>PRO</em></strong></a>
+<div class="app-header-actions">
+<button class="btn btn-outline-dark app-back-button" type="button" data-history-back><i class="bi bi-arrow-left"></i><span>Retour</span></button>
+<button class="navbar-toggler border-0" type="button" data-menu-toggle="main" aria-controls="menu" aria-label="Ouvrir le menu" aria-expanded="false"><i class="bi bi-list"></i></button>
+</div>
+<div class="app-menu" id="menu" tabindex="-1" aria-hidden="true"><div class="app-menu-header"><strong>ProspectPilot Pro</strong><button class="btn-close" type="button" data-menu-close aria-label="Fermer le menu"></button></div><div class="app-menu-body">
+<ul class="navbar-nav app-menu-links">
+<li><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+<li><a class="nav-link" href="{% url 'prospect_list' %}">Prospects</a></li>
+<li><a class="nav-link" href="{% url 'prospect_import' %}">Import</a></li>
+<li><a class="nav-link" href="{% url 'company_search' %}">Recherche réelle</a></li>
+<li><a class="nav-link" href="{% url 'response_board' %}">Réponses</a></li>
+<li><a class="nav-link" href="{% url 'suppression_list' %}">Oppositions</a></li>
+<li><a class="nav-link" href="{% url 'search_console_home' %}">Search Console</a></li>
+</ul><div class="app-menu-actions"><button class="btn btn-outline-dark" type="button" data-history-back><i class="bi bi-arrow-left"></i> Retour</button><a class="btn btn-primary-custom" href="{% url 'prospect_create' %}">Ajouter</a><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="btn btn-dark">Quitter</button></form></div>
+</div></div></div></nav></header>
+{% endif %}
+{% if messages %}<div class="container-fluid px-lg-4 pt-3">{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}</div>{% endif %}
+<main>{% block content %}{% endblock %}</main>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+<script src="{% static 'js/app.js' %}?v=20260721-flow1"></script>
+</body></html>

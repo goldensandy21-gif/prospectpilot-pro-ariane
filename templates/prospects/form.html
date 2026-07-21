@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<section class="page-intro"><div><span class="eyebrow">FICHE</span><h1>{{ title }}</h1></div></section><section class="container-fluid px-lg-4 pb-5"><div class="form-panel"><form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary-custom">Enregistrer</button></form></div></section>{% endblock %}
