@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Campagnes | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="page-intro">
+  <div><span class="eyebrow">CAMPAGNES</span><h1>Campagnes PredictNeed IA</h1></div>
+  <div class="action-row"><a class="btn btn-primary-custom" href="{% url 'campaign_create' %}">Nouvelle campagne</a></div>
+</section>
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="panel">
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Nom</th><th>Produit</th><th>ICP</th><th>Statut</th><th>Prospects</th><th>Créée</th><th></th></tr></thead>
+        <tbody>
+          {% for c in campaigns %}
+            <tr>
+              <td>{{ c.name }}</td>
+              <td>{{ c.product }}</td>
+              <td>{{ c.icp|default:"—" }}</td>
+              <td><span class="badge text-bg-secondary">{{ c.get_status_display }}</span></td>
+              <td>{{ c.campaign_prospects.count }}</td>
+              <td>{{ c.created_at|date:"d/m/Y" }}</td>
+              <td><a class="btn btn-sm btn-outline-dark" href="{% url 'campaign_detail' c.pk %}">Ouvrir</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">Aucune campagne pour le moment.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

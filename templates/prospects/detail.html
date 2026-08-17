@@ -35,6 +35,74 @@
   </div>
 </section>
 
+<section class="container-fluid px-lg-4 pt-4">
+  <div class="panel">
+    <h2>Pourquoi prospecter cette entreprise ? (PredictNeed IA)</h2>
+    <div class="row g-3 mb-3">
+      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-4 fw-bold">{{ prospect.predictneed_acquisition_score }}</div><div>Score total</div></div></div>
+      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.icp_fit_score }}</div><div>ICP fit</div></div></div>
+      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.need_score }}</div><div>Besoin</div></div></div>
+      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.acquisition_maturity_score }}</div><div>Maturité</div></div></div>
+      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.contactability_score }}</div><div>Contactabilité</div></div></div>
+      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.timing_score }}</div><div>Timing</div></div></div>
+    </div>
+    <p>
+      Grade : <span class="badge text-bg-dark">{{ prospect.predictneed_grade|default:"—" }}</span>
+      · ICP : {{ prospect.predictneed_icp|default:"—" }}
+      · Éligible outbound :
+      {% if prospect.outbound_eligible %}<span class="badge text-bg-success">Oui</span>
+      {% else %}<span class="badge text-bg-secondary">Non — {{ prospect.outbound_ineligible_reason }}</span>{% endif %}
+      {% if prospect.predictneed_excluded %}· <span class="badge text-bg-danger">Exclu : {{ prospect.predictneed_exclusion_reason }}</span>{% endif %}
+    </p>
+
+    {% if prospect.predictneed_score_reasons %}
+      <details open><summary>Raisons du score</summary>
+        <ul>{% for r in prospect.predictneed_score_reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+      </details>
+    {% endif %}
+
+    <div class="row mt-3">
+      <div class="col-md-6">
+        <h3 class="h6">Signaux détectés</h3>
+        <ul>
+          {% for s in predictneed_signals %}
+            <li class="{% if not s.positive %}text-danger{% endif %}">{{ s.label }} ({{ s.category }}, {% if s.positive %}+{% else %}-{% endif %}{{ s.score_impact }})</li>
+          {% empty %}<li>Aucun signal détecté.</li>{% endfor %}
+        </ul>
+        <h3 class="h6">Technologies</h3>
+        <p>{% for t in predictneed_technologies %}<span class="badge text-bg-light border me-1">{{ t.technology }}</span>{% empty %}Aucune technologie détectée.{% endfor %}</p>
+        <h3 class="h6">Concurrents détectés</h3>
+        <ul>{% for d in predictneed_competitors %}<li>{{ d.competitor.name }} — {{ d.competitor.suggested_angle }}</li>{% empty %}<li>Aucun.</li>{% endfor %}</ul>
+      </div>
+      <div class="col-md-6">
+        {% with brief=predictneed_agent_brief %}
+        {% if brief %}
+          <h3 class="h6">AgentBrief</h3>
+          <p><strong>Pourquoi cette entreprise :</strong> {{ brief.why_this_company }}</p>
+          <p><strong>Besoin détecté :</strong> {{ brief.detected_need }}</p>
+          <p><strong>Contact recommandé :</strong> {{ brief.recommended_contact|default:"aucun" }} — {{ brief.recommended_contact_reason }}</p>
+          <p><strong>Angle recommandé :</strong> {{ brief.recommended_angle }}</p>
+          <p><strong>Prochaine action :</strong> {{ brief.next_best_action }}</p>
+          {% if brief.evidence_urls %}
+            <p><strong>Preuves :</strong> {% for u in brief.evidence_urls %}<a href="{{ u }}" target="_blank">source</a>{% if not forloop.last %}, {% endif %}{% endfor %}</p>
+          {% endif %}
+        {% else %}
+          <p>Aucun AgentBrief généré pour ce prospect.</p>
+        {% endif %}
+        {% endwith %}
+        <h3 class="h6">Campagnes</h3>
+        <ul>{% for m in predictneed_campaigns %}<li>{{ m.campaign.name }} — {{ m.get_status_display }}</li>{% empty %}<li>Aucune campagne.</li>{% endfor %}</ul>
+        <h3 class="h6">Conversion &amp; revenu attribué</h3>
+        <ul>
+          {% for c in predictneed_conversions %}<li>{{ c.get_event_type_display }} — {{ c.occurred_at|date:"d/m/Y" }}</li>{% endfor %}
+          {% for r in predictneed_revenue %}<li>MRR attribué : {{ r.mrr }} {{ r.currency }}</li>{% endfor %}
+          {% if not predictneed_conversions and not predictneed_revenue %}<li>Aucune conversion enregistrée.</li>{% endif %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="container-fluid px-lg-4 pb-5">
   <div class="score-grid">
     <article><span>Technique</span><strong>{{ prospect.technical_score }}</strong></article>

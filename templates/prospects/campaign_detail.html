@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <span class="eyebrow">{{ campaign.get_status_display }}</span>
+    <h1>{{ campaign.name }}</h1>
+    <p>{{ campaign.product }} — {{ campaign.icp|default:"Tous ICP" }} — seuil {{ campaign.score_threshold }}/100</p>
+  </div>
+  <div class="action-row">
+    <a class="btn btn-outline-dark" href="{% url 'campaign_preview' campaign.pk %}">Aperçu de l'e-mail</a>
+    {% if campaign.status == "draft" %}
+      <form method="post" action="{% url 'campaign_validate' campaign.pk %}" onsubmit="return confirm('Valider cette campagne ? Les e-mails pourront ensuite être envoyés par lots.');">
+        {% csrf_token %}<button class="btn btn-primary-custom">Valider la campagne</button>
+      </form>
+    {% elif campaign.is_sendable %}
+      <form method="post" action="{% url 'campaign_send_batch' campaign.pk %}" onsubmit="return confirm('Envoyer le prochain lot dans la limite journalière ({{ campaign.daily_send_limit }}) ?');">
+        {% csrf_token %}<button class="btn btn-primary-custom">Envoyer le prochain lot</button>
+      </form>
+    {% endif %}
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="panel">
+    <h2>Envoyer un e-mail de test</h2>
+    <form method="post" action="{% url 'campaign_send_test' campaign.pk %}" class="d-flex gap-2">
+      {% csrf_token %}
+      <input type="email" name="test_email" class="form-control" placeholder="ton-adresse@exemple.fr" required style="max-width:320px;">
+      <button class="btn btn-outline-dark">Envoyer le test</button>
+    </form>
+    <p class="legal-note mt-2">Un e-mail de test ne modifie ni le statut du prospect, ni son score, ni la campagne.</p>
+  </div>
+
+  <div class="panel mt-4">
+    <h2>Prospects ({{ members.count }})</h2>
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Entreprise</th><th>Score</th><th>Grade</th><th>Statut</th><th>Contacté</th><th>Dernier engagement</th></tr></thead>
+        <tbody>
+          {% for m in members %}
+            <tr>
+              <td><a href="{% url 'prospect_detail' m.prospect.pk %}">{{ m.prospect.name }}</a></td>
+              <td>{{ m.acquisition_score_snapshot }}/100</td>
+              <td><span class="badge text-bg-dark">{{ m.grade }}</span></td>
+              <td><span class="badge text-bg-secondary">{{ m.get_status_display }}</span></td>
+              <td>{{ m.contacted_at|date:"d/m/Y H:i"|default:"—" }}</td>
+              <td>{{ m.last_engagement_at|date:"d/m/Y H:i"|default:"—" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

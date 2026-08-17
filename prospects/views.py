@@ -29,6 +29,7 @@ from .services.company_search import (
 )
 from .services.messaging import build_message
 from .services.emailing import render_email, send_prospect_email
+from .services.suppression import suppress
 from .services.reports import prospects_csv, prospects_xlsx, prospect_pdf
 from .services.search_console import (
     create_flow, list_properties, fetch_metrics,
@@ -217,6 +218,14 @@ def prospect_detail(request, pk):
             "contact_people": prospect.contact_people.all()[:20],
             "evidence_items": prospect.evidence_items.select_related("source")[:50],
             "enrichment_runs": prospect.enrichment_runs.all()[:5],
+            # ETAPE 23 — Pourquoi prospecter cette entreprise ? (PredictNeed IA)
+            "predictneed_signals": prospect.signals.all()[:20],
+            "predictneed_technologies": prospect.technologies.filter(is_active=True),
+            "predictneed_competitors": prospect.competitor_detections.select_related("competitor"),
+            "predictneed_agent_brief": prospect.agent_briefs.order_by("-generated_at").first(),
+            "predictneed_campaigns": prospect.campaign_memberships.select_related("campaign"),
+            "predictneed_conversions": prospect.conversion_events.all(),
+            "predictneed_revenue": prospect.revenue_attributions.all(),
         },
     )
 
@@ -521,14 +530,12 @@ def mark_optout(request, pk):
     prospect.prospecting_allowed = False
     prospect.status = "do_not_contact"
     prospect.priority_score = 0
+    prospect.predictneed_stage = "do_not_contact"
     prospect.save()
-    Suppression.objects.get_or_create(
-        prospect=prospect,
-        defaults={
-            "email": prospect.public_email,
-            "reason": "Opposition manuelle",
-        },
-    )
+    suppress(email=prospect.public_email, prospect=prospect, reason="Opposition manuelle")
+    prospect.campaign_memberships.exclude(
+        status__in=["paying", "activated", "signed_up"]
+    ).update(status="do_not_contact", excluded_reason="Opposition manuelle")
     messages.success(
         request,
         "Prospect ajouté à la liste d’opposition.",
@@ -1240,7 +1247,16 @@ def sms_api_status(request):
 
 
 
-def unsubscribe(request,token):
-    prospect=get_object_or_404(Prospect,unsubscribe_token=token); prospect.prospecting_allowed=False; prospect.status="do_not_contact"; prospect.priority_score=0; prospect.save()
-    Suppression.objects.get_or_create(prospect=prospect,defaults={"email":prospect.public_email,"reason":"Désinscription par lien e-mail"})
-    return render(request,"prospects/unsubscribe.html",{"prospect":prospect})
+def unsubscribe(request, token):
+    prospect = get_object_or_404(Prospect, unsubscribe_token=token)
+    prospect.prospecting_allowed = False
+    prospect.status = "do_not_contact"
+    prospect.priority_score = 0
+    prospect.predictneed_stage = "do_not_contact"
+    prospect.save()
+    suppress(email=prospect.public_email, prospect=prospect, reason="Désinscription par lien e-mail")
+    # ETAPE 17 : bloque aussi les campagnes en cours pour ce prospect.
+    prospect.campaign_memberships.exclude(
+        status__in=["paying", "activated", "signed_up"]
+    ).update(status="do_not_contact", excluded_reason="Désinscription du prospect")
+    return render(request, "prospects/unsubscribe.html", {"prospect": prospect})

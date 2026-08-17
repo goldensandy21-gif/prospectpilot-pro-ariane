@@ -1,5 +1,7 @@
 from django.urls import path
 from . import views
+from . import acquisition_views
+from . import api_views
 
 urlpatterns = [
     path("",views.dashboard,name="dashboard"),
@@ -33,4 +35,30 @@ urlpatterns = [
     path("integrations/search-console/connect/",views.search_console_connect,name="search_console_connect"),
     path("integrations/search-console/callback/",views.search_console_callback,name="search_console_callback"),
     path("integrations/search-console/sync/",views.search_console_sync,name="search_console_sync"),
+
+    # ETAPE 22/30 — Acquisition Intelligence & recherche PredictNeed IA
+    path("acquisition/",acquisition_views.acquisition_intelligence,name="acquisition_intelligence"),
+    path("search/acquisition/",acquisition_views.acquisition_search,name="acquisition_search"),
+    path("search/acquisition/<int:pk>/",acquisition_views.acquisition_search_run_detail,name="acquisition_search_run_detail"),
+
+    # ETAPE 15/17 — campagnes
+    path("campaigns/",acquisition_views.campaign_list,name="campaign_list"),
+    path("campaigns/new/",acquisition_views.campaign_create,name="campaign_create"),
+    path("campaigns/<int:pk>/",acquisition_views.campaign_detail,name="campaign_detail"),
+    path("campaigns/<int:pk>/preview/",acquisition_views.campaign_preview,name="campaign_preview"),
+    path("campaigns/<int:pk>/validate/",acquisition_views.campaign_validate,name="campaign_validate"),
+    path("campaigns/<int:pk>/send/",acquisition_views.campaign_send_batch,name="campaign_send_batch"),
+    path("campaigns/<int:pk>/send-test/",acquisition_views.campaign_send_test,name="campaign_send_test"),
+
+    # ETAPE 19 — tracking de clic
+    path("t/<str:token>/",acquisition_views.campaign_click,name="campaign_click"),
+
+    # ETAPE 16 — transparence individuelle
+    path("privacy/prospect/<uuid:token>/",acquisition_views.prospect_privacy,name="prospect_privacy"),
+
+    # ETAPE 34 — réglages e-mail PredictNeed IA
+    path("settings/email/",acquisition_views.email_settings,name="email_settings"),
+
+    # ETAPE 20 — API serveur-à-serveur (PredictNeed -> ProspectPilot)
+    path("api/predictneed/events/",api_views.predictneed_events_webhook,name="predictneed_events_webhook"),
 ]

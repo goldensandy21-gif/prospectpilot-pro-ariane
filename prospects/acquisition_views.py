@@ -1,0 +1,336 @@
+"""ETAPE 22/23/30 — Acquisition Intelligence, campagnes, tracking, réglages e-mail.
+
+Séparé de views.py (déjà volumineux) pour ne pas fragiliser les vues historiques.
+"""
+from django.conf import settings
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.db.models import Count, Sum
+from django.http import HttpResponse, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils import timezone
+
+from .forms import AcquisitionSearchForm, CampaignCreateForm, EmailComplianceProfileForm, ProductProfileForm
+from .services.deliverability import diagnose_domain
+from .models import (
+    Campaign,
+    CampaignProspect,
+    CompanySearchRun,
+    ConversionEvent,
+    EmailComplianceProfile,
+    EmailSend,
+    EngagementEvent,
+    ICPProfile,
+    ProductProfile,
+    Prospect,
+    RevenueAttribution,
+)
+from .services.campaign_sending import get_or_create_default_sequence, send_campaign_batch
+from .services.predictneed_email import render_predictneed_email, send_predictneed_campaign_email
+from .services.provenance import get_email_provenance
+from .services.suppression import is_suppressed
+from .services.tracking import resolve_target_url
+from .tasks import run_company_search_run_task
+
+
+# ---------------------------------------------------------------------------
+# ETAPE 19 — clic de campagne (redirection avec attribution)
+# ---------------------------------------------------------------------------
+
+def campaign_click(request, token):
+    campaign_prospect = get_object_or_404(CampaignProspect.objects.select_related("campaign__product", "prospect"), tracking_token=token)
+    cta_type = request.GET.get("cta", "product")
+    step_id = request.GET.get("step") or None
+    variant_id = request.GET.get("variant") or None
+
+    target_url = resolve_target_url(campaign_prospect, cta_type)
+    EngagementEvent.objects.create(
+        campaign_prospect=campaign_prospect,
+        prospect=campaign_prospect.prospect,
+        campaign=campaign_prospect.campaign,
+        email_step_id=step_id, email_variant_id=variant_id,
+        event_type="link_clicked", source="prospectpilot",
+        metadata={"cta": cta_type},
+    )
+    campaign_prospect.last_engagement_at = timezone.now()
+    if campaign_prospect.status == "contacted":
+        campaign_prospect.status = "engaged"
+    campaign_prospect.save(update_fields=["last_engagement_at", "status"])
+
+    if not target_url:
+        return HttpResponse("Lien non configuré pour ce produit.", status=404)
+    return HttpResponseRedirect(target_url)
+
+
+# ---------------------------------------------------------------------------
+# ETAPE 16 — page de transparence individuelle (rien d'interne exposé)
+# ---------------------------------------------------------------------------
+
+def prospect_privacy(request, token):
+    prospect = get_object_or_404(Prospect, unsubscribe_token=token)
+    email = prospect.public_email or ""
+    provenance = get_email_provenance(prospect, email) if email else None
+    context = {
+        "company_name": prospect.name,
+        "email": email,
+        "provenance": provenance,
+        "unsubscribe_url": reverse("unsubscribe", kwargs={"token": prospect.unsubscribe_token}),
+    }
+    return render(request, "prospects/prospect_privacy.html", context)
+
+
+# ---------------------------------------------------------------------------
+# ETAPE 4/30 — recherche « Acquisition PredictNeed IA »
+# ---------------------------------------------------------------------------
+
+@login_required
+def acquisition_search(request):
+    form = AcquisitionSearchForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        data = form.cleaned_data
+        criteria = {}
+        if data["department"]:
+            criteria["department"] = data["department"]
+        if data["region"]:
+            criteria["region"] = data["region"]
+        if data["icp"].naf_codes:
+            criteria["naf_codes"] = data["icp"].naf_codes
+        search_run = CompanySearchRun.objects.create(
+            user=request.user, mode="acquisition", product=data["product"], icp=data["icp"],
+            campaign_name=data["campaign_name"], criteria=criteria,
+            volume_max_candidates=data["volume_max_candidates"],
+            volume_max_enrich=data["volume_max_enrich"],
+            score_threshold=data["score_threshold"],
+            status="queued",
+        )
+        run_company_search_run_task.delay(search_run.pk)
+        messages.success(request, "Recherche PredictNeed IA lancée en arrière-plan.")
+        return redirect("acquisition_search_run_detail", pk=search_run.pk)
+
+    recent_runs = CompanySearchRun.objects.filter(mode="acquisition").order_by("-created_at")[:10]
+    return render(request, "prospects/acquisition_search.html", {"form": form, "recent_runs": recent_runs})
+
+
+@login_required
+def acquisition_search_run_detail(request, pk):
+    search_run = get_object_or_404(CompanySearchRun, pk=pk)
+    candidates = search_run.candidates.select_related("prospect").order_by("-final_score", "-pre_score")
+    return render(request, "prospects/acquisition_search_run_detail.html", {
+        "search_run": search_run, "candidates": candidates[:300],
+    })
+
+
+# ---------------------------------------------------------------------------
+# ETAPE 22 — Acquisition Intelligence
+# ---------------------------------------------------------------------------
+
+@login_required
+def acquisition_intelligence(request):
+    prospects_a = Prospect.objects.filter(predictneed_grade="A", predictneed_excluded=False)
+    prospects_b = Prospect.objects.filter(predictneed_grade="B", predictneed_excluded=False)
+    ready_to_contact = Prospect.objects.filter(predictneed_stage="ready_to_contact")
+    active_campaigns = Campaign.objects.filter(status="active")
+
+    emails_sent = EmailSend.objects.filter(status="sent", is_test=False).count()
+    clicks = EngagementEvent.objects.filter(event_type="link_clicked").count()
+    signups = ConversionEvent.objects.filter(event_type="signup").count()
+    activations = ConversionEvent.objects.filter(event_type="activation").count()
+    subscriptions = ConversionEvent.objects.filter(event_type="paying").count()
+    mrr_total = RevenueAttribution.objects.aggregate(total=Sum("mrr"))["total"] or 0
+
+    priority_prospects = (
+        Prospect.objects.filter(predictneed_grade__in=["A", "B"], predictneed_excluded=False)
+        .select_related("predictneed_icp")
+        .order_by("-predictneed_acquisition_score")[:100]
+    )
+
+    context = {
+        "count_a": prospects_a.count(),
+        "count_b": prospects_b.count(),
+        "count_ready": ready_to_contact.count(),
+        "active_campaigns": active_campaigns.count(),
+        "emails_sent": emails_sent,
+        "clicks": clicks,
+        "signups": signups,
+        "activations": activations,
+        "subscriptions": subscriptions,
+        "mrr_total": mrr_total,
+        "priority_prospects": priority_prospects,
+    }
+    return render(request, "prospects/acquisition_intelligence.html", context)
+
+
+# ---------------------------------------------------------------------------
+# ETAPE 15/17 — campagnes : brouillon -> aperçu -> validation -> envoi
+# ---------------------------------------------------------------------------
+
+@login_required
+def campaign_list(request):
+    campaigns = Campaign.objects.select_related("product", "icp").order_by("-created_at")
+    return render(request, "prospects/campaign_list.html", {"campaigns": campaigns})
+
+
+@login_required
+def campaign_create(request):
+    grade = request.GET.get("grade", "A")
+    icp_id = request.GET.get("icp")
+    qs = Prospect.objects.filter(predictneed_excluded=False, outbound_eligible=True)
+    if grade == "A":
+        qs = qs.filter(predictneed_grade="A")
+    elif grade == "AB":
+        qs = qs.filter(predictneed_grade__in=["A", "B"])
+    if icp_id:
+        qs = qs.filter(predictneed_icp_id=icp_id)
+    qs = qs.order_by("-predictneed_acquisition_score")[:200]
+
+    if request.method == "POST":
+        form = CampaignCreateForm(request.POST)
+        selected_ids = request.POST.getlist("selected")
+        if form.is_valid() and selected_ids:
+            campaign = form.save(commit=False)
+            campaign.created_by = request.user
+            campaign.status = "draft"
+            campaign.sequence = get_or_create_default_sequence(campaign.product, campaign.icp)
+            campaign.save()
+            for prospect in Prospect.objects.filter(pk__in=selected_ids):
+                brief = prospect.agent_briefs.order_by("-generated_at").first()
+                CampaignProspect.objects.get_or_create(
+                    campaign=campaign, prospect=prospect,
+                    defaults={
+                        "acquisition_score_snapshot": prospect.predictneed_acquisition_score,
+                        "grade": prospect.predictneed_grade,
+                        "agent_brief": brief,
+                        "status": "selected",
+                        "selected_at": timezone.now(),
+                    },
+                )
+            messages.success(request, f"Campagne « {campaign.name} » créée en brouillon avec {len(selected_ids)} prospect(s).")
+            return redirect("campaign_detail", pk=campaign.pk)
+        messages.error(request, "Sélectionne au moins un prospect et vérifie le formulaire.")
+    else:
+        form = CampaignCreateForm(initial={
+            "product": ProductProfile.objects.filter(active=True).first(),
+            "score_threshold": 65, "daily_send_limit": 30, "total_limit": 200,
+        })
+
+    return render(request, "prospects/campaign_create.html", {
+        "form": form, "prospects": qs, "grade": grade,
+    })
+
+
+@login_required
+def campaign_detail(request, pk):
+    campaign = get_object_or_404(Campaign.objects.select_related("product", "icp", "sequence"), pk=pk)
+    members = campaign.campaign_prospects.select_related("prospect").order_by("-acquisition_score_snapshot")
+    return render(request, "prospects/campaign_detail.html", {"campaign": campaign, "members": members})
+
+
+@login_required
+def campaign_preview(request, pk):
+    campaign = get_object_or_404(Campaign, pk=pk)
+    member = campaign.campaign_prospects.select_related("prospect").order_by("-acquisition_score_snapshot").first()
+    if not member:
+        messages.error(request, "Aucun prospect dans cette campagne.")
+        return redirect("campaign_detail", pk=pk)
+
+    sequence = campaign.sequence or get_or_create_default_sequence(campaign.product, campaign.icp)
+    step = sequence.steps.order_by("order").first()
+    variant = step.variants.filter(active=True).first() if step else None
+    if not step or not variant:
+        messages.error(request, "Aucune séquence e-mail configurée pour cette campagne.")
+        return redirect("campaign_detail", pk=pk)
+
+    subject, html, text = render_predictneed_email(member, step, variant, request)
+    email = member.prospect.public_email or ""
+    provenance = get_email_provenance(member.prospect, email) if email else None
+    blocked = is_suppressed(email, prospect=member.prospect)
+
+    return render(request, "prospects/campaign_preview.html", {
+        "campaign": campaign, "member": member, "subject": subject, "html": html, "text": text,
+        "provenance": provenance, "blocked": blocked, "compliance_profile": getattr(campaign.product, "compliance_profile", None),
+    })
+
+
+@login_required
+def campaign_validate(request, pk):
+    campaign = get_object_or_404(Campaign, pk=pk)
+    if request.method == "POST":
+        compliance = getattr(campaign.product, "compliance_profile", None)
+        if not compliance or not compliance.compliance_ready:
+            messages.error(request, compliance.readiness_reason() if compliance else "Aucun profil de conformité configuré pour ce produit.")
+            return redirect("campaign_detail", pk=pk)
+        campaign.status = "ready"
+        campaign.validated_at = timezone.now()
+        campaign.validated_by = request.user
+        campaign.save(update_fields=["status", "validated_at", "validated_by"])
+        campaign.campaign_prospects.filter(status="selected").update(status="ready_to_contact")
+        messages.success(request, "Campagne validée. Elle peut maintenant être envoyée par lots.")
+    return redirect("campaign_detail", pk=pk)
+
+
+@login_required
+def campaign_send_batch(request, pk):
+    campaign = get_object_or_404(Campaign, pk=pk)
+    if request.method == "POST":
+        if campaign.status == "ready":
+            campaign.status = "active"
+            campaign.save(update_fields=["status"])
+        summary = send_campaign_batch(campaign)
+        messages.success(request, f"Envoi : {summary['sent']} envoyé(s), {summary['blocked']} bloqué(s), {summary['skipped']} reporté(s).")
+        for error in summary["errors"][:5]:
+            messages.error(request, error)
+    return redirect("campaign_detail", pk=pk)
+
+
+@login_required
+def campaign_send_test(request, pk):
+    campaign = get_object_or_404(Campaign, pk=pk)
+    test_email = request.POST.get("test_email", "").strip()
+    member = campaign.campaign_prospects.select_related("prospect").first()
+    if request.method == "POST" and test_email and member:
+        sequence = campaign.sequence or get_or_create_default_sequence(campaign.product, campaign.icp)
+        step = sequence.steps.order_by("order").first()
+        variant = step.variants.filter(active=True).first() if step else None
+        record = send_predictneed_campaign_email(member, step, variant, request, is_test=True, test_recipient=test_email)
+        if record.status == "sent":
+            messages.success(request, f"E-mail de test envoyé à {test_email} (aucun statut de campagne modifié).")
+        else:
+            messages.error(request, f"Échec de l'envoi de test : {record.error}")
+    return redirect("campaign_detail", pk=pk)
+
+
+# ---------------------------------------------------------------------------
+# ETAPE 34 — réglages Email PredictNeed IA (jamais les secrets SMTP)
+# ---------------------------------------------------------------------------
+
+@login_required
+def email_settings(request):
+    product = ProductProfile.objects.filter(slug="predictneed-ia").first()
+    if not product:
+        messages.error(request, "Produit PredictNeed IA introuvable — lance `initialize_app`.")
+        return redirect("dashboard")
+    compliance, _ = EmailComplianceProfile.objects.get_or_create(product=product)
+
+    if request.method == "POST":
+        product_form = ProductProfileForm(request.POST, instance=product)
+        compliance_form = EmailComplianceProfileForm(request.POST, instance=compliance)
+        if product_form.is_valid() and compliance_form.is_valid():
+            product_form.save()
+            compliance_form.save()
+            messages.success(request, "Réglages e-mail PredictNeed IA mis à jour.")
+            return redirect("email_settings")
+    else:
+        product_form = ProductProfileForm(instance=product)
+        compliance_form = EmailComplianceProfileForm(instance=compliance)
+
+    sender_domain = (product.sender_email or "").split("@", 1)[-1]
+    deliverability = diagnose_domain(sender_domain, dkim_selector=settings.EMAIL_DKIM_SELECTOR)
+    smtp_configured = bool(settings.EMAIL_HOST_USER and settings.EMAIL_HOST_PASSWORD)
+
+    return render(request, "prospects/email_settings.html", {
+        "product_form": product_form, "compliance_form": compliance_form,
+        "compliance_ready": compliance.compliance_ready, "missing_fields": compliance.missing_required_fields,
+        "deliverability": deliverability, "smtp_configured": smtp_configured,
+        "sender_email": product.sender_email, "reply_to_email": product.reply_to_email,
+    })

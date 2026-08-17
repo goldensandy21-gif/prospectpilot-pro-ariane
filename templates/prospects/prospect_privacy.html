@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Confidentialité | PredictNeed IA{% endblock %}
+{% block content %}
+<section class="container-fluid px-lg-4 py-5" style="max-width:720px;">
+  <h1>Pourquoi avez-vous reçu cet e-mail ?</h1>
+  <p>Ce message concerne <strong>{{ company_name }}</strong>, dans le cadre d'une prospection professionnelle B2B.</p>
+
+  <h2 class="h5 mt-4">Quelle donnée est utilisée ?</h2>
+  <p>{{ email|default:"Aucune adresse enregistrée." }}</p>
+
+  <h2 class="h5 mt-4">Quelle est sa source ?</h2>
+  {% if provenance and provenance.source_type != "unknown" %}
+    <p>{{ provenance.source_name }}{% if provenance.source_url %} — <a href="{{ provenance.source_url }}" target="_blank" rel="noopener">voir la page source</a>{% endif %}</p>
+  {% else %}
+    <p>Provenance non déterminée.</p>
+  {% endif %}
+
+  <h2 class="h5 mt-4">Quand a-t-elle été collectée ?</h2>
+  <p>{{ provenance.collected_at|date:"d/m/Y"|default:"Non précisé." }}</p>
+
+  <h2 class="h5 mt-4">Pourquoi est-elle utilisée ?</h2>
+  <p>Pour vous présenter un service en lien avec votre activité professionnelle.</p>
+
+  <h2 class="h5 mt-4">Comment exercer mes droits ?</h2>
+  <p>Vous pouvez vous opposer à tout moment, gratuitement et sans justification.</p>
+
+  <a class="btn btn-primary-custom mt-3" href="{{ unsubscribe_url }}">Se désabonner</a>
+</section>
+{% endblock %}

@@ -22,6 +22,7 @@ from .services.scoring import calculate_scores
 from .services.site_discovery import discover_official_site
 from .services.commoncrawl import open_web_presence
 from .services.enrichment import EnrichmentEngine, create_external_source_records
+from .services.acquisition_pipeline import run_acquisition_pipeline
 
 GENERIC_EMAIL_PREFIXES = (
     "contact",
@@ -585,3 +586,54 @@ def scheduled_refresh_top_prospects():
     for prospect_id in ids:
         audit_site_task.delay(prospect_id)
     return len(ids)
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=1)
+def run_company_search_run_task(self, search_run_id):
+    """ETAPE 4/26 — Pipeline complet d'acquisition PredictNeed IA pour un CompanySearchRun.
+
+    Ré-invocable sans effet de bord : les candidats déjà traités (status
+    converted/not_eligible/error) sont ignorés, ce qui permet une reprise après
+    échec partiel sans dupliquer le travail déjà fait.
+    """
+    from .models import CompanySearchRun
+
+    search_run = CompanySearchRun.objects.get(pk=search_run_id)
+    try:
+        run_acquisition_pipeline(search_run)
+    except Exception as exc:
+        search_run.status = "failed"
+        search_run.append_error(f"Échec du pipeline : {exc}", save=False)
+        search_run.finished_at = timezone.now()
+        search_run.save(update_fields=["status", "errors", "finished_at"])
+        raise
+    return {
+        "search_run_id": search_run.pk,
+        "status": search_run.status,
+        "registry_count": search_run.registry_count,
+        "preselected_count": search_run.preselected_count,
+        "qualified_a": search_run.qualified_a_count,
+        "qualified_b": search_run.qualified_b_count,
+        "qualified_c": search_run.qualified_c_count,
+    }
+
+
+@shared_task
+def run_scheduled_search_preset_task(preset_id):
+    """ETAPE 25 — SearchPreset planifié via Celery Beat.
+
+    Ne déclenche jamais d'envoi d'e-mail : crée uniquement un CompanySearchRun.
+    L'envoi reste soumis à une campagne distincte, explicitement validée."""
+    from .models import CompanySearchRun, SearchPreset
+
+    preset = SearchPreset.objects.get(pk=preset_id, active=True)
+    search_run = CompanySearchRun.objects.create(
+        mode="acquisition", product=preset.product, icp=preset.icp, preset=preset,
+        campaign_name=f"Planifié — {preset.name}",
+        criteria=preset.filters, volume_max_candidates=preset.volume_max_candidates,
+        volume_max_enrich=preset.volume_max_enrich, score_threshold=preset.score_threshold,
+    )
+    preset.last_run_at = timezone.now()
+    preset.save(update_fields=["last_run_at"])
+    run_company_search_run_task.delay(search_run.pk)
+    return search_run.pk

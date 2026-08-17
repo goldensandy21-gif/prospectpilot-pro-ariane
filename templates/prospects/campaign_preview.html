@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Aperçu — {{ campaign.name }} | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="page-intro">
+  <div><span class="eyebrow">APERÇU E-MAIL</span><h1>{{ campaign.name }}</h1></div>
+  <div class="action-row"><a class="btn btn-outline-dark" href="{% url 'campaign_detail' campaign.pk %}">Retour à la campagne</a></div>
+</section>
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="search-layout">
+    <div class="panel">
+      <h2>Détails d'envoi</h2>
+      <table class="table">
+        <tr><th>Expéditeur</th><td>{{ campaign.product.display_sender_identity }}</td></tr>
+        <tr><th>Reply-To</th><td>{{ campaign.product.reply_to_email }}</td></tr>
+        <tr><th>Destinataire</th><td>{{ member.prospect.public_email|default:"—" }}</td></tr>
+        <tr><th>Type</th><td>
+          {% for e in member.prospect.public_emails.all %}{% if e.email == member.prospect.public_email %}{{ e.get_email_type_display }}{% endif %}{% endfor %}
+        </td></tr>
+        <tr><th>Source</th><td>{{ provenance.source_name|default:"non déterminée" }}{% if provenance.source_url %} — <a href="{{ provenance.source_url }}" target="_blank">source</a>{% endif %}</td></tr>
+        <tr><th>Objet</th><td>{{ subject }}</td></tr>
+        <tr><th>Statut</th><td>
+          {% if blocked %}<span class="badge text-bg-danger">Bloqué</span> — opposition ou adresse non exploitable.
+          {% else %}<span class="badge text-bg-success">Prêt</span>{% endif %}
+        </td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Version texte</h2>
+      <pre style="white-space:pre-wrap;font-size:13px;">{{ text }}</pre>
+    </div>
+  </div>
+  <div class="panel mt-4">
+    <h2>Version HTML</h2>
+    <iframe srcdoc="{{ html }}" style="width:100%;height:520px;border:1px solid #dee2e6;border-radius:8px;"></iframe>
+  </div>
+</section>
+{% endblock %}

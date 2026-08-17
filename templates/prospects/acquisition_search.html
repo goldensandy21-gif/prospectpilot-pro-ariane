@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Acquisition PredictNeed IA | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="page-intro search-intro">
+  <div>
+    <span class="eyebrow">MOTEUR D'ACQUISITION</span>
+    <h1>Trouver les meilleurs prospects pour PredictNeed IA.</h1>
+    <p>Recherche en pipeline : registre → pré-score → site → quick scan → contact → score final. Rien n'est envoyé automatiquement.</p>
+  </div>
+  <div class="action-row">
+    <a class="btn btn-outline-dark" href="{% url 'company_search' %}">Recherche manuelle</a>
+    <a class="btn btn-primary-custom" href="{% url 'acquisition_search' %}">Acquisition PredictNeed IA</a>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="search-layout">
+    <div class="form-panel">
+      <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button class="btn btn-primary-custom">Trouver les meilleurs prospects</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>Ce qui va se passer</h2>
+      <ol>
+        <li>Récupération des entreprises actives (déduplication SIREN/SIRET).</li>
+        <li>Pré-score registre selon l'ICP choisi.</li>
+        <li>Découverte + validation du site officiel pour les meilleurs candidats.</li>
+        <li>Quick scan commercial + détection technologies/concurrents.</li>
+        <li>Recherche d'un e-mail professionnel exploitable.</li>
+        <li>Score PredictNeed final + AgentBrief, classement A/B/C.</li>
+      </ol>
+      <p class="legal-note">Aucun e-mail n'est envoyé pendant la recherche. Le résultat final est « Voir les prospects prioritaires », pas « Importer tout ».</p>
+    </div>
+  </div>
+
+  {% if recent_runs %}
+    <div class="panel mt-4">
+      <h2>Recherches récentes</h2>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Lancée</th><th>ICP</th><th>Statut</th><th>Registre</th><th>Présélec.</th><th>Sites</th><th>Enrichis</th><th>A/B/C</th><th></th></tr></thead>
+          <tbody>
+            {% for run in recent_runs %}
+              <tr>
+                <td>{{ run.created_at|date:"d/m/Y H:i" }}</td>
+                <td>{{ run.icp|default:"—" }}</td>
+                <td><span class="badge text-bg-secondary">{{ run.get_status_display }}</span></td>
+                <td>{{ run.registry_count }}</td>
+                <td>{{ run.preselected_count }}</td>
+                <td>{{ run.with_site_count }}</td>
+                <td>{{ run.enriched_count }}</td>
+                <td>{{ run.qualified_a_count }}/{{ run.qualified_b_count }}/{{ run.qualified_c_count }}</td>
+                <td><a class="btn btn-sm btn-outline-dark" href="{% url 'acquisition_search_run_detail' run.pk %}">Voir</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

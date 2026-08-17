@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
 
 from .email_templates import upsert_email_templates
+from ...services.seed_data import run_all_seeds
 
 
 class Command(BaseCommand):
@@ -34,6 +35,7 @@ class Command(BaseCommand):
             user.save()
 
         upsert_email_templates()
+        run_all_seeds()
 
         if created:
             self.stdout.write(self.style.SUCCESS(

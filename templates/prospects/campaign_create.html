@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Nouvelle campagne | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="page-intro">
+  <div><span class="eyebrow">NOUVELLE CAMPAGNE</span><h1>Sélectionner les prospects à contacter</h1>
+  <p>Grade {{ grade }} — {{ prospects|length }} prospect(s) éligible(s) (e-mail exploitable, non exclus).</p></div>
+</section>
+<section class="container-fluid px-lg-4 pb-5">
+  <form method="post">
+    {% csrf_token %}
+    <div class="search-layout">
+      <div class="form-panel">
+        <h2>Paramètres de la campagne</h2>
+        {{ form.as_p }}
+      </div>
+      <div class="panel">
+        <h2>Grade</h2>
+        <div class="action-row">
+          <a class="btn btn-sm btn-outline-dark {% if grade == 'A' %}active{% endif %}" href="?grade=A">A uniquement</a>
+          <a class="btn btn-sm btn-outline-dark {% if grade == 'AB' %}active{% endif %}" href="?grade=AB">A + B</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel mt-4">
+      <h2>Prospects</h2>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th></th><th>Entreprise</th><th>Score</th><th>Grade</th><th>Email</th><th>Angle recommandé</th></tr></thead>
+          <tbody>
+            {% for p in prospects %}
+              <tr>
+                <td><input type="checkbox" name="selected" value="{{ p.pk }}" checked></td>
+                <td>{{ p.name }}</td>
+                <td>{{ p.predictneed_acquisition_score }}/100</td>
+                <td><span class="badge text-bg-dark">{{ p.predictneed_grade }}</span></td>
+                <td>{{ p.public_email }}</td>
+                <td>{{ p.agent_briefs.first.recommended_angle|default:""|truncatechars:80 }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6">Aucun prospect éligible pour ce grade. Lance une recherche d'acquisition d'abord.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if prospects %}<button class="btn btn-primary-custom">Créer la campagne en brouillon</button>{% endif %}
+    </div>
+  </form>
+</section>
+{% endblock %}

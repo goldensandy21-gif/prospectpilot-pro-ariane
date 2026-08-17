@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Email PredictNeed IA | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="page-intro">
+  <div><span class="eyebrow">PARAMÈTRES</span><h1>Email PredictNeed IA</h1>
+    <p>Les secrets SMTP (mot de passe, hôte) restent uniquement dans les variables d'environnement Fly — jamais ici.</p></div>
+</section>
+<section class="container-fluid px-lg-4 pb-5">
+  {% if not compliance_ready %}
+    <div class="alert alert-warning">
+      Configuration de conformité incomplète — champs manquants : {{ missing_fields|join:", " }}.
+      Tant que ces informations ne sont pas complétées, les campagnes ne pourront pas être validées.
+    </div>
+  {% endif %}
+
+  <div class="panel mb-4">
+    <h2>Configuration Email &amp; Délivrabilité</h2>
+    <p class="legal-note">Diagnostic uniquement — aucune modification DNS n'est effectuée automatiquement.</p>
+    <table class="table">
+      <tr><th>SMTP configuré</th><td>{% if smtp_configured %}Oui{% else %}Non{% endif %}</td></tr>
+      <tr><th>Adresse expéditeur</th><td>{{ sender_email|default:"—" }}</td></tr>
+      <tr><th>Reply-To</th><td>{{ reply_to_email|default:"—" }}</td></tr>
+      <tr><th>SPF détecté</th><td>{{ deliverability.spf_detected|default:"—" }}</td></tr>
+      <tr><th>DMARC détecté</th><td>{{ deliverability.dmarc_detected|default:"—" }}</td></tr>
+      <tr><th>DKIM</th><td>{{ deliverability.dkim_status|default:"—" }}</td></tr>
+      <tr><th>MX</th><td>{{ deliverability.mx_present|default:"—" }}</td></tr>
+    </table>
+  </div>
+  <form method="post">
+    {% csrf_token %}
+    <div class="search-layout">
+      <div class="form-panel">
+        <h2>Identité produit &amp; expéditeur</h2>
+        {{ product_form.as_p }}
+      </div>
+      <div class="form-panel">
+        <h2>Conformité (à valider juridiquement)</h2>
+        <p class="legal-note">Ne laisse jamais d'informations juridiques inventées. Les champs inconnus doivent rester vides.</p>
+        {{ compliance_form.as_p }}
+      </div>
+    </div>
+    <button class="btn btn-primary-custom mt-3">Enregistrer</button>
+  </form>
+</section>
+{% endblock %}

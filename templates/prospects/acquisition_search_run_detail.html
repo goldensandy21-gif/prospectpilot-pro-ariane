@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Recherche #{{ search_run.pk }} | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <span class="eyebrow">{{ search_run.get_status_display }}</span>
+    <h1>{{ search_run.icp|default:"Recherche" }} — {{ search_run.product|default:"" }}</h1>
+    <p>Lancée le {{ search_run.created_at|date:"d/m/Y H:i" }} par {{ search_run.user|default:"—" }}.</p>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="panel">
+    <h2>Progression</h2>
+    <div class="row text-center g-3">
+      <div class="col"><div class="fs-4 fw-bold">{{ search_run.registry_count }}</div><div>Candidats registre</div></div>
+      <div class="col"><div class="fs-4 fw-bold">{{ search_run.preselected_count }}</div><div>Présélectionnés</div></div>
+      <div class="col"><div class="fs-4 fw-bold">{{ search_run.with_site_count }}</div><div>Sites trouvés</div></div>
+      <div class="col"><div class="fs-4 fw-bold">{{ search_run.enriched_count }}</div><div>Analysés</div></div>
+      <div class="col"><div class="fs-4 fw-bold">{{ search_run.with_email_count }}</div><div>Emails trouvés</div></div>
+      <div class="col"><div class="fs-4 fw-bold text-success">{{ search_run.qualified_a_count }}</div><div>A</div></div>
+      <div class="col"><div class="fs-4 fw-bold text-primary">{{ search_run.qualified_b_count }}</div><div>B</div></div>
+      <div class="col"><div class="fs-4 fw-bold">{{ search_run.qualified_c_count }}</div><div>C</div></div>
+      <div class="col"><div class="fs-4 fw-bold text-muted">{{ search_run.not_eligible_count }}</div><div>Non éligibles</div></div>
+    </div>
+    {% if search_run.status == "running" or search_run.status == "queued" %}
+      <p class="legal-note mt-3">Recherche en cours en arrière-plan — actualise la page pour suivre la progression.</p>
+    {% endif %}
+    {% if search_run.errors %}
+      <details class="mt-3"><summary>{{ search_run.errors|length }} erreur(s)</summary>
+        <ul>{% for e in search_run.errors|slice:":20" %}<li>{{ e.message }}</li>{% endfor %}</ul>
+      </details>
+    {% endif %}
+  </div>
+
+  {% if search_run.qualified_a_count or search_run.qualified_b_count %}
+    <div class="action-row mt-4">
+      <a class="btn btn-primary-custom" href="{% url 'campaign_create' %}?grade=AB&icp={{ search_run.icp_id }}">Voir les prospects prioritaires</a>
+    </div>
+  {% endif %}
+
+  <div class="panel mt-4">
+    <h2>Candidats</h2>
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Entreprise</th><th>Statut</th><th>Pré-score</th><th>Score final</th><th>Grade</th><th>Site</th><th>Email</th></tr></thead>
+        <tbody>
+          {% for c in candidates %}
+            <tr>
+              <td>
+                {% if c.prospect %}<a href="{% url 'prospect_detail' c.prospect.pk %}">{{ c.name }}</a>{% else %}{{ c.name }}{% endif %}
+              </td>
+              <td><span class="badge text-bg-secondary">{{ c.get_status_display }}</span></td>
+              <td>{{ c.pre_score }}</td>
+              <td>{{ c.final_score }}</td>
+              <td>{% if c.grade %}<span class="badge text-bg-dark">{{ c.grade }}</span>{% else %}—{% endif %}</td>
+              <td>{% if c.site_url %}<a href="{{ c.site_url }}" target="_blank">{{ c.site_url|truncatechars:30 }}</a>{% else %}—{% endif %}</td>
+              <td>{{ c.contact_email|default:"—" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">Aucun candidat pour le moment.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

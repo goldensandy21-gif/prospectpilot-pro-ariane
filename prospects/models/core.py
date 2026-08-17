@@ -56,6 +56,47 @@ class Prospect(models.Model):
     rejected = models.BooleanField(default=False)
     rejection_reason = models.CharField(max_length=255, blank=True)
 
+    # --- PredictNeed IA acquisition scoring (ETAPE 13) ---------------------
+    # Ne remplace pas les scores historiques ci-dessus : score distinct, additif.
+    PREDICTNEED_GRADES = [("A", "A"), ("B", "B"), ("C", "C"), ("D", "D")]
+    predictneed_product = models.ForeignKey(
+        "prospects.ProductProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="prospects",
+    )
+    predictneed_icp = models.ForeignKey(
+        "prospects.ICPProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="matched_prospects",
+    )
+    icp_fit_score = models.PositiveSmallIntegerField(default=0)
+    need_score = models.PositiveSmallIntegerField(default=0)
+    acquisition_maturity_score = models.PositiveSmallIntegerField(default=0)
+    contactability_score = models.PositiveSmallIntegerField(default=0)
+    timing_score = models.PositiveSmallIntegerField(default=0)
+    predictneed_acquisition_score = models.PositiveSmallIntegerField(default=0, db_index=True)
+    predictneed_grade = models.CharField(max_length=1, choices=PREDICTNEED_GRADES, blank=True, db_index=True)
+    predictneed_score_reasons = models.JSONField(default=list, blank=True)
+
+    outbound_eligible = models.BooleanField(default=False)
+    outbound_ineligible_reason = models.CharField(max_length=255, blank=True)
+    predictneed_excluded = models.BooleanField(default=False)
+    predictneed_exclusion_reason = models.CharField(max_length=255, blank=True)
+
+    PREDICTNEED_STAGES = [
+        ("identified", "Identifié"),
+        ("enriched", "Enrichi"),
+        ("qualified", "Qualifié"),
+        ("ready_to_contact", "Prêt à contacter"),
+        ("contacted", "Contacté"),
+        ("engaged", "Engagé"),
+        ("signed_up", "Inscrit"),
+        ("activated", "Activé"),
+        ("paying", "Client payant"),
+        ("nurture", "Nurture"),
+        ("lost", "Perdu"),
+        ("do_not_contact", "Ne plus contacter"),
+    ]
+    predictneed_stage = models.CharField(max_length=20, choices=PREDICTNEED_STAGES, blank=True, db_index=True)
+
     class Meta:
         ordering = ["-priority_score", "-updated_at"]
 
@@ -537,6 +578,13 @@ class EmailTemplate(models.Model):
     html_body = models.TextField()
     text_body = models.TextField(blank=True)
     active = models.BooleanField(default=True)
+    # ETAPE 31 — les anciens modèles ProspectPilot restent utilisables mais ne sont
+    # plus proposés par défaut aux campagnes PredictNeed (is_legacy=True par migration).
+    product = models.ForeignKey(
+        "prospects.ProductProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="email_templates",
+    )
+    is_legacy = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -545,15 +593,44 @@ class EmailTemplate(models.Model):
 
 
 class EmailSend(models.Model):
-    STATUS = [("draft","Brouillon"),("sent","Envoyé"),("failed","Échec"),("blocked","Bloqué")]
+    STATUS = [
+        ("draft", "Brouillon"),
+        ("queued", "En file"),
+        ("sent", "Envoyé"),
+        ("failed", "Échec"),
+        ("blocked", "Bloqué"),
+        ("bounced", "Rejeté (bounce)"),
+        ("suppressed", "Supprimé (opposition)"),
+    ]
     prospect = models.ForeignKey(Prospect, related_name="email_sends", on_delete=models.CASCADE)
     template = models.ForeignKey(EmailTemplate, null=True, blank=True, on_delete=models.SET_NULL)
+    campaign_prospect = models.ForeignKey(
+        "prospects.CampaignProspect", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="email_sends",
+    )
+    email_step = models.ForeignKey("prospects.EmailStep", null=True, blank=True, on_delete=models.SET_NULL)
+    email_variant = models.ForeignKey("prospects.EmailVariant", null=True, blank=True, on_delete=models.SET_NULL)
+
+    from_email = models.EmailField(blank=True)
+    reply_to_email = models.EmailField(blank=True)
     to_email = models.EmailField()
     subject = models.CharField(max_length=255)
     html_body = models.TextField(blank=True)
     text_body = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=STATUS, default="draft")
     provider_message_id = models.CharField(max_length=255, blank=True)
+
+    message_id = models.CharField(max_length=255, blank=True, help_text="En-tête Message-ID généré à l'envoi.")
+    in_reply_to = models.CharField(max_length=255, blank=True)
+    references = models.CharField(max_length=1000, blank=True)
+
+    smtp_response = models.CharField(max_length=500, blank=True)
+    bounce_reason = models.CharField(max_length=500, blank=True)
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+
+    is_test = models.BooleanField(default=False)
+
     error = models.TextField(blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

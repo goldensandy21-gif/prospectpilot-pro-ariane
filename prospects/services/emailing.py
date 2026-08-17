@@ -7,6 +7,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .messaging import build_message
+from .suppression import is_suppressed
 from prospects.models import ContactLog, EmailSend, Suppression
 
 
@@ -249,12 +250,11 @@ def render_email(prospect, template_obj=None, request=None, subject_override="",
 
 
 def can_email(prospect):
-    if not prospect.prospecting_allowed or prospect.status == "do_not_contact":
-        return False, "Prospect en opposition."
     if not prospect.public_email:
         return False, "Aucune adresse e-mail professionnelle."
-    if Suppression.objects.filter(active=True, email__iexact=prospect.public_email).exists():
-        return False, "Adresse présente dans la liste d'opposition."
+    # ETAPE 17 (mission 2) : contrôle centralisé, refait juste avant chaque envoi SMTP.
+    if is_suppressed(prospect.public_email, prospect=prospect):
+        return False, "Adresse ou prospect en opposition."
     return True, ""
 
 
