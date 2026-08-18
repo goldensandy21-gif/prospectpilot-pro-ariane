@@ -14,16 +14,27 @@ from django.conf import settings
 
 from .crawler import (
     EMAIL_RE, PHONE_RE, analyze_contact_forms, clean_email, clean_phone,
-    normalize_url, platform_for_url, same_domain,
+    is_important_url, normalize_url, platform_for_url, same_domain,
 )
 from .robots import RobotsPolicy
 from .technology import detect_technologies, detect_technologies_detailed
 
+# Priorité 1 (mission 5, section 2) : pages où l'on trouve réellement des
+# coordonnées publiques (contact, mentions légales, à-propos, équipe). Ces
+# pages doivent être visitées avant les pages purement commerciales, sinon
+# elles ne sont jamais atteintes quand ACQUISITION_QUICK_SCAN_PAGES est petit.
+PRIORITY_PATH_TERMS = [
+    "contact", "contactez-nous", "nous-contacter",
+    "mentions-legales", "mentions-légales", "legal",
+    "a-propos", "apropos", "qui-sommes-nous",
+    "equipe", "équipe", "team",
+]
+# Priorité 2 : pages commerciales, utiles mais secondaires pour la recherche
+# de coordonnées.
 COMMERCIAL_PATH_TERMS = [
     "services", "offres", "offre", "produits", "produit", "tarif", "tarifs",
-    "prix", "pricing", "contact", "devis", "reservation", "réservation",
-    "inscription", "formation", "formations", "a-propos", "apropos",
-    "qui-sommes-nous", "mentions-legales", "mentions-légales",
+    "prix", "pricing", "devis", "reservation", "réservation",
+    "inscription", "formation", "formations",
 ]
 
 BUSINESS_TYPE_SIGNALS = {
@@ -44,10 +55,14 @@ ACCOUNT_TERMS = ["mon compte", "se connecter", "créer un compte", "espace clien
 LEAD_MAGNET_TERMS = ["télécharger le guide", "livre blanc", "recevoir le guide", "ebook gratuit"]
 
 
-def _candidate_urls(base_url):
+def _guessed_candidate_urls(base_url):
+    """URLs devinées, dans l'ordre de priorité : contact/légal/à-propos/équipe
+    d'abord, pages commerciales ensuite. Utilisées seulement pour compléter les
+    vrais liens internes trouvés sur la page d'accueil (voir quick_scan_site)."""
     parsed = urlparse(base_url)
     root = f"{parsed.scheme}://{parsed.netloc}"
-    return [base_url] + [urljoin(root, f"/{term}") for term in COMMERCIAL_PATH_TERMS]
+    ordered_terms = PRIORITY_PATH_TERMS + COMMERCIAL_PATH_TERMS
+    return [urljoin(root, f"/{term}") for term in ordered_terms]
 
 
 def _detect_business_type(lower_text):
@@ -89,6 +104,7 @@ def quick_scan_site(url, max_pages=None):
         "found_emails": [],
         "found_phones": [],
         "found_social_links": [],
+        "email_sources": {},
         "pages": [],
         "worth_full_analysis": False,
         "error": "",
@@ -98,7 +114,6 @@ def quick_scan_site(url, max_pages=None):
         result["error"] = "robots.txt interdit l'accès à ce site."
         return result
 
-    candidates = _candidate_urls(url)[:max_pages]
     headers = {"User-Agent": settings.USER_AGENT, "Accept": "text/html,application/xhtml+xml"}
     aggregated_text = []
     technologies = set()
@@ -106,75 +121,107 @@ def quick_scan_site(url, max_pages=None):
     found_emails = []
     found_phones = []
     found_social_links = []
+    email_sources = {}
+    visited = set()
+
+    def _scan_page(client, page_url):
+        if page_url in visited or not same_domain(url, page_url) or not policy.allowed(page_url):
+            return None
+        visited.add(page_url)
+        try:
+            response = client.get(page_url)
+        except httpx.HTTPError:
+            return None
+        if response.status_code >= 400 or "text/html" not in response.headers.get("content-type", ""):
+            return None
+
+        result["pages_checked"] += 1
+        soup = BeautifulSoup(response.text, "lxml")
+        text = soup.get_text(" ", strip=True)
+        lower = text.lower()
+        aggregated_text.append(lower)
+        technologies.update(detect_technologies(response.text, dict(response.headers)))
+        for tech in detect_technologies_detailed(response.text, dict(response.headers), source_url=page_url):
+            technologies_detailed.setdefault(tech["technology"], tech)
+
+        for match in EMAIL_RE.findall(text):
+            email = match.strip().lower()
+            found_emails.append(email)
+            email_sources.setdefault(email, page_url)
+        for link in soup.find_all("a", href=True):
+            href = link["href"].strip()
+            if href.lower().startswith("mailto:"):
+                email = clean_email(href)
+                if email:
+                    found_emails.append(email)
+                    email_sources.setdefault(email, page_url)
+            elif href.lower().startswith("tel:"):
+                phone = clean_phone(href)
+                if phone:
+                    found_phones.append(phone)
+            else:
+                platform = platform_for_url(href)
+                if platform:
+                    found_social_links.append({"platform": platform, "url": href, "source_url": page_url})
+        for match in PHONE_RE.findall(text):
+            found_phones.append(match.strip())
+
+        forms = analyze_contact_forms(soup, page_url)
+        if forms:
+            result["has_contact_form"] = True
+            if any(f["has_email_field"] for f in forms):
+                result["has_quote_request"] = result["has_quote_request"] or "devis" in lower
+
+        path = urlparse(page_url).path.lower()
+        if any(term in path or term in lower for term in ["tarif", "prix", "pricing"]):
+            result["has_pricing_page"] = True
+        if any(term in path for term in ["services", "offre", "offres", "produit", "produits"]):
+            result["has_services_page"] = True
+        if any(term in lower for term in RESERVATION_TERMS):
+            result["has_booking"] = True
+        if any(term in lower for term in ["inscription", "s'inscrire", "je m'inscris"]):
+            result["has_signup"] = True
+        if any(term in lower for term in CART_TERMS):
+            result["has_cart"] = True
+        if any(term in lower for term in PAYMENT_TERMS):
+            result["has_payment"] = True
+        if any(term in lower for term in ACCOUNT_TERMS):
+            result["has_user_account"] = True
+        if any(term in lower for term in NEWSLETTER_TERMS):
+            result["has_newsletter"] = True
+        if any(term in lower for term in CHAT_TERMS):
+            result["has_chat"] = True
+        if any(term in lower for term in LEAD_MAGNET_TERMS):
+            result["has_lead_magnet"] = True
+
+        result["pages"].append({"url": page_url, "path": path})
+        return soup
 
     with httpx.Client(headers=headers, timeout=12, follow_redirects=True) as client:
-        for page_url in candidates:
-            if not same_domain(url, page_url) or not policy.allowed(page_url):
-                continue
-            try:
-                response = client.get(page_url)
-            except httpx.HTTPError:
-                continue
-            if response.status_code >= 400 or "text/html" not in response.headers.get("content-type", ""):
-                continue
+        # 1) page d'accueil toujours en premier.
+        homepage_soup = _scan_page(client, url)
 
-            result["pages_checked"] += 1
-            soup = BeautifulSoup(response.text, "lxml")
-            text = soup.get_text(" ", strip=True)
-            lower = text.lower()
-            aggregated_text.append(lower)
-            technologies.update(detect_technologies(response.text, dict(response.headers)))
-            for tech in detect_technologies_detailed(response.text, dict(response.headers), source_url=page_url):
-                technologies_detailed.setdefault(tech["technology"], tech)
+        # 2) vrais liens internes vers contact/mentions légales/à-propos/équipe
+        # trouvés sur la page d'accueil — priorité sur les URLs devinées.
+        real_priority_links = []
+        if homepage_soup is not None:
+            for link in homepage_soup.find_all("a", href=True):
+                absolute = urljoin(url, link["href"].strip())
+                if same_domain(url, absolute) and is_important_url(absolute) and absolute not in visited:
+                    real_priority_links.append(absolute)
 
-            for match in EMAIL_RE.findall(text):
-                found_emails.append(match.strip().lower())
-            for link in soup.find_all("a", href=True):
-                href = link["href"].strip()
-                if href.lower().startswith("mailto:"):
-                    email = clean_email(href)
-                    if email:
-                        found_emails.append(email)
-                elif href.lower().startswith("tel:"):
-                    phone = clean_phone(href)
-                    if phone:
-                        found_phones.append(phone)
-                else:
-                    platform = platform_for_url(href)
-                    if platform:
-                        found_social_links.append({"platform": platform, "url": href, "source_url": page_url})
-            for match in PHONE_RE.findall(text):
-                found_phones.append(match.strip())
+        # 3) URLs devinées (priorité contact/légal/à-propos avant commercial),
+        # utilisées seulement pour compléter ce qui n'a pas été trouvé en vrai.
+        guessed_links = _guessed_candidate_urls(url)
 
-            forms = analyze_contact_forms(soup, page_url)
-            if forms:
-                result["has_contact_form"] = True
-                if any(f["has_email_field"] for f in forms):
-                    result["has_quote_request"] = result["has_quote_request"] or "devis" in lower
+        ordered_candidates = []
+        for link in real_priority_links + guessed_links:
+            if link not in ordered_candidates:
+                ordered_candidates.append(link)
 
-            path = urlparse(page_url).path.lower()
-            if any(term in path or term in lower for term in ["tarif", "prix", "pricing"]):
-                result["has_pricing_page"] = True
-            if any(term in path for term in ["services", "offre", "offres", "produit", "produits"]):
-                result["has_services_page"] = True
-            if any(term in lower for term in RESERVATION_TERMS):
-                result["has_booking"] = True
-            if any(term in lower for term in ["inscription", "s'inscrire", "je m'inscris"]):
-                result["has_signup"] = True
-            if any(term in lower for term in CART_TERMS):
-                result["has_cart"] = True
-            if any(term in lower for term in PAYMENT_TERMS):
-                result["has_payment"] = True
-            if any(term in lower for term in ACCOUNT_TERMS):
-                result["has_user_account"] = True
-            if any(term in lower for term in NEWSLETTER_TERMS):
-                result["has_newsletter"] = True
-            if any(term in lower for term in CHAT_TERMS):
-                result["has_chat"] = True
-            if any(term in lower for term in LEAD_MAGNET_TERMS):
-                result["has_lead_magnet"] = True
-
-            result["pages"].append({"url": page_url, "path": path})
+        remaining_budget = max(0, max_pages - result["pages_checked"])
+        for page_url in ordered_candidates[:remaining_budget]:
+            _scan_page(client, page_url)
 
     full_text = " ".join(aggregated_text)
     result["business_type"] = _detect_business_type(full_text)
@@ -183,6 +230,7 @@ def quick_scan_site(url, max_pages=None):
     result["found_emails"] = list(dict.fromkeys(e for e in found_emails if e))
     result["found_phones"] = list(dict.fromkeys(p for p in found_phones if p))
     result["found_social_links"] = list({link["url"]: link for link in found_social_links}.values())
+    result["email_sources"] = email_sources
     result["has_landing_pages"] = result["pages_checked"] >= 2 and result["has_pricing_page"] and result["has_services_page"]
 
     conversion_signals = sum([

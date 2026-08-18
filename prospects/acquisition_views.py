@@ -215,14 +215,34 @@ def campaign_list(request):
 def campaign_create(request):
     grade = request.GET.get("grade", "A")
     icp_id = request.GET.get("icp")
-    qs = Prospect.objects.filter(predictneed_excluded=False, outbound_eligible=True)
+    # Mission 5, section 8 : seuls les prospects volontairement retenus
+    # (section 3) sont proposables en campagne — jamais un simple candidat
+    # technique du pipeline d'acquisition non encore choisi par l'utilisateur.
+    base_qs = Prospect.objects.filter(selected_for_prospecting=True)
+    if icp_id:
+        base_qs = base_qs.filter(predictneed_icp_id=icp_id)
+    qs = base_qs.filter(predictneed_excluded=False, outbound_eligible=True)
     if grade == "A":
         qs = qs.filter(predictneed_grade="A")
     elif grade == "AB":
         qs = qs.filter(predictneed_grade__in=["A", "B"])
-    if icp_id:
-        qs = qs.filter(predictneed_icp_id=icp_id)
     qs = qs.order_by("-predictneed_acquisition_score")[:200]
+
+    empty_state_reasons = None
+    if request.method != "POST" and not qs.exists():
+        graded_ok = base_qs.filter(predictneed_excluded=False, outbound_eligible=True)
+        below_threshold = graded_ok
+        if grade == "A":
+            below_threshold = below_threshold.exclude(predictneed_grade="A")
+        elif grade == "AB":
+            below_threshold = below_threshold.exclude(predictneed_grade__in=["A", "B"])
+        empty_state_reasons = {
+            "total_selected": base_qs.count(),
+            "without_email": base_qs.filter(public_email="").count(),
+            "excluded": base_qs.filter(predictneed_excluded=True).count(),
+            "not_outbound_eligible": base_qs.filter(predictneed_excluded=False, outbound_eligible=False).count(),
+            "below_threshold": below_threshold.count(),
+        }
 
     if request.method == "POST":
         form = CampaignCreateForm(request.POST)
@@ -256,6 +276,7 @@ def campaign_create(request):
 
     return render(request, "prospects/campaign_create.html", {
         "form": form, "prospects": qs, "grade": grade,
+        "empty_state_reasons": empty_state_reasons,
     })
 
 

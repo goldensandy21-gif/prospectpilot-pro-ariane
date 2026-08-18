@@ -10,6 +10,7 @@ identifiés par leur `status`, la requête registre par `cursor`).
 """
 import logging
 import time
+from datetime import date
 
 from django.conf import settings
 from django.utils import timezone
@@ -36,6 +37,11 @@ GENERIC_EMAIL_PREFIXES = (
     "contact", "info", "bonjour", "commercial", "direction", "accueil", "hello",
     "support", "serviceclient", "service-client", "rh", "recrutement", "secretariat",
 )
+
+# Marqueur exact utilisé pour distinguer, parmi les status="not_eligible", ceux
+# qui n'ont jamais eu de site (donc jamais réellement analysés) de ceux qui ont
+# été scannés puis exclus par le scoring (mission 5, section 10).
+NO_SITE_REASON = "Site officiel introuvable."
 
 
 def classify_email_type(email):
@@ -140,8 +146,8 @@ def _build_prospect_defaults(candidate, icp, product):
     creation = row.get("creation_date")
     if creation:
         try:
-            defaults["creation_date"] = creation[:10]
-        except Exception:
+            defaults["creation_date"] = date.fromisoformat(str(creation)[:10])
+        except (TypeError, ValueError):
             pass
     return defaults
 
@@ -170,7 +176,7 @@ def _process_candidate(search_run, candidate, icp, product):
 
     if candidate.status == "no_site":
         candidate.status = "not_eligible"
-        candidate.outbound_ineligible_reason = "Site officiel introuvable."
+        candidate.outbound_ineligible_reason = NO_SITE_REASON
         candidate.save(update_fields=["status", "outbound_ineligible_reason"])
         return "no_site"
 
@@ -201,15 +207,29 @@ def _process_candidate(search_run, candidate, icp, product):
     candidate.prospect = prospect
     candidate.save(update_fields=["prospect"])
 
+    return _finalize_candidate(candidate, quick_data, technologies, prospect, icp, product)
+
+
+def _finalize_candidate(candidate, quick_data, technologies, prospect, icp, product):
+    """Contacts détectés + technologies/signaux + score final + AgentBrief.
+
+    Extrait de _process_candidate pour être rejouable tel quel par un script de
+    réparation (candidat déjà passé par site_found/scanned, prospect déjà créé) :
+    ne reconvoque jamais le crawl/quick_scan, seulement le reste du pipeline.
+    `technologies` = quick_data.get("technologies_detailed", []) dans le cas
+    général, sauf réutilisation d'un scan récent (voir _process_candidate).
+    """
     # --- contacts détectés lors du quick scan ------------------------------------
     found_emails = quick_data.get("found_emails", [])
+    email_sources = quick_data.get("email_sources", {})
     generic = [e for e in found_emails if classify_email_type(e) == "generic"]
     best_email = (generic or found_emails or [""])[0]
     for email in dict.fromkeys(found_emails):
         PublicEmail.objects.update_or_create(
             prospect=prospect, email=email,
             defaults={
-                "email_type": classify_email_type(email), "source_url": candidate.site_url,
+                "email_type": classify_email_type(email),
+                "source_url": email_sources.get(email, candidate.site_url),
                 "source_type": "website", "is_primary": email == best_email,
                 "is_active": True, "discovery_method": "quick_scan",
             },
@@ -316,13 +336,19 @@ def run_acquisition_pipeline(search_run):
             continue
 
     final = SearchCandidate.objects.filter(search_run=search_run)
+    no_site_excluded = final.filter(status="not_eligible", outbound_ineligible_reason=NO_SITE_REASON)
+    scanned_not_eligible = final.filter(status="not_eligible").exclude(outbound_ineligible_reason=NO_SITE_REASON)
+
     search_run.with_site_count = final.exclude(site_url="").count()
-    search_run.enriched_count = final.filter(status__in=["converted", "not_eligible"]).count()
+    # "Réellement scannés" : convertis + exclus après analyse réelle — jamais les no_site.
+    search_run.enriched_count = final.filter(status="converted").count() + scanned_not_eligible.count()
     search_run.with_email_count = final.exclude(contact_email="").count()
     search_run.qualified_a_count = final.filter(grade="A").count()
     search_run.qualified_b_count = final.filter(grade="B").count()
     search_run.qualified_c_count = final.filter(grade="C").count()
-    search_run.not_eligible_count = final.filter(status="not_eligible").count() + final.filter(status="rejected_prescore").count()
+    # Non éligibles après analyse réelle uniquement (exclut les no_site, jamais analysés).
+    search_run.not_eligible_count = scanned_not_eligible.count() + final.filter(status="rejected_prescore").count()
+    search_run.error_count = final.filter(status="error").count()
     search_run.status = "done"
     search_run.current_stage = "done"
     search_run.finished_at = timezone.now()

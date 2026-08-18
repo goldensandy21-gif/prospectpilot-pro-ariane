@@ -169,12 +169,17 @@ class CompanySearchRun(models.Model):
     registry_count = models.PositiveIntegerField(default=0)
     preselected_count = models.PositiveIntegerField(default=0)
     with_site_count = models.PositiveIntegerField(default=0)
+    # "Réellement scannés" (mission 5, section 10) : candidats ayant vraiment
+    # eu un quick scan de leur site — exclut explicitement les no_site, qui ne
+    # sont jamais passés par une analyse réelle malgré un status final "not_eligible".
     enriched_count = models.PositiveIntegerField(default=0)
     with_email_count = models.PositiveIntegerField(default=0)
     qualified_a_count = models.PositiveIntegerField(default=0)
     qualified_b_count = models.PositiveIntegerField(default=0)
     qualified_c_count = models.PositiveIntegerField(default=0)
+    # Non éligibles APRÈS analyse réelle uniquement (exclut les no_site : voir enriched_count).
     not_eligible_count = models.PositiveIntegerField(default=0)
+    error_count = models.PositiveIntegerField(default=0)
 
     errors = models.JSONField(default=list, blank=True)
     current_stage = models.CharField(max_length=40, blank=True)

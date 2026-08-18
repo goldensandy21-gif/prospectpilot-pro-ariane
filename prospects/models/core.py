@@ -81,6 +81,16 @@ class Prospect(models.Model):
     predictneed_excluded = models.BooleanField(default=False)
     predictneed_exclusion_reason = models.CharField(max_length=255, blank=True)
 
+    # Mission 5, section 3 — sélection humaine explicite. Distingue les
+    # prospects volontairement retenus pour la prospection (visibles dans la
+    # liste principale « Prospects ») des simples candidats techniques générés
+    # par le pipeline d'acquisition (données conservées, mais pas encombrants
+    # tant qu'ils n'ont pas été choisis). Voir la migration de backfill : les
+    # prospects historiques (source != acquisition_pipeline_predictneed) sont
+    # considérés déjà sélectionnés, les candidats techniques ne le sont pas.
+    selected_for_prospecting = models.BooleanField(default=False, db_index=True)
+    selected_at = models.DateTimeField(null=True, blank=True)
+
     PREDICTNEED_STAGES = [
         ("identified", "Identifié"),
         ("enriched", "Enrichi"),

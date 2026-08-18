@@ -38,7 +38,22 @@
                 <td>{{ p.agent_briefs.first.recommended_angle|default:""|truncatechars:80 }}</td>
               </tr>
             {% empty %}
-              <tr><td colspan="6">Aucun prospect éligible pour ce grade. Lance une recherche d'acquisition d'abord.</td></tr>
+              <tr><td colspan="6">
+                {% if empty_state_reasons %}
+                  {% if empty_state_reasons.total_selected == 0 %}
+                    Aucun prospect sélectionné pour la prospection pour l'instant. Va dans « Trouver des prospects », lance une recherche, puis ajoute des entreprises aux Prospects.
+                  {% else %}
+                    0 prospect contactable pour ce filtre, sur {{ empty_state_reasons.total_selected }} prospect(s) sélectionné(s) au total :
+                    {{ empty_state_reasons.without_email }} sans e-mail,
+                    {{ empty_state_reasons.excluded }} exclu(s),
+                    {{ empty_state_reasons.not_outbound_eligible }} non contactable(s) (autre raison),
+                    {{ empty_state_reasons.below_threshold }} sous le seuil de grade choisi.
+                    Essaie « A + B » ou ajoute plus de prospects.
+                  {% endif %}
+                {% else %}
+                  Aucun prospect éligible pour ce grade. Lance une recherche d'acquisition d'abord.
+                {% endif %}
+              </td></tr>
             {% endfor %}
           </tbody>
         </table>

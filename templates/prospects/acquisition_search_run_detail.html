@@ -16,12 +16,13 @@
       <div class="col"><div class="fs-4 fw-bold">{{ search_run.registry_count }}</div><div>Candidats registre</div></div>
       <div class="col"><div class="fs-4 fw-bold">{{ search_run.preselected_count }}</div><div>Présélectionnés</div></div>
       <div class="col"><div class="fs-4 fw-bold">{{ search_run.with_site_count }}</div><div>Sites trouvés</div></div>
-      <div class="col"><div class="fs-4 fw-bold">{{ search_run.enriched_count }}</div><div>Analysés</div></div>
+      <div class="col"><div class="fs-4 fw-bold">{{ search_run.enriched_count }}</div><div>Réellement scannés</div></div>
       <div class="col"><div class="fs-4 fw-bold">{{ search_run.with_email_count }}</div><div>Emails trouvés</div></div>
       <div class="col"><div class="fs-4 fw-bold text-success">{{ search_run.qualified_a_count }}</div><div>A</div></div>
       <div class="col"><div class="fs-4 fw-bold text-primary">{{ search_run.qualified_b_count }}</div><div>B</div></div>
       <div class="col"><div class="fs-4 fw-bold">{{ search_run.qualified_c_count }}</div><div>C</div></div>
-      <div class="col"><div class="fs-4 fw-bold text-muted">{{ search_run.not_eligible_count }}</div><div>Non éligibles</div></div>
+      <div class="col"><div class="fs-4 fw-bold text-muted">{{ search_run.not_eligible_count }}</div><div>Non éligibles (analysés)</div></div>
+      <div class="col"><div class="fs-4 fw-bold text-danger">{{ search_run.error_count }}</div><div>Erreurs</div></div>
     </div>
     {% if search_run.status == "running" or search_run.status == "queued" %}
       <p class="legal-note mt-3">Recherche en cours en arrière-plan — actualise la page pour suivre la progression.</p>
