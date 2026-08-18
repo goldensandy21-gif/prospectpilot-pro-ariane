@@ -32,6 +32,8 @@
         <tr><th>Source</th><td>{{ provenance.source_name|default:"non déterminée" }}{% if provenance.source_url %} — <a href="{{ provenance.source_url }}" target="_blank" rel="noopener">voir la source</a>{% endif %}</td></tr>
         <tr><th>Objet</th><td>{{ subject }}</td></tr>
         <tr><th>CTA → destination PredictNeed</th><td>{% if destination_url %}<a href="{{ destination_url }}" target="_blank" rel="noopener">{{ destination_url|truncatechars:70 }}</a>{% else %}<span class="status-pill status-danger">URL non configurée dans ProductProfile</span>{% endif %}</td></tr>
+        <tr><th>Footer conformité</th><td>{% if compliance_profile and compliance_profile.compliance_ready %}<span class="status-pill status-success">Présent et conforme</span>{% else %}<span class="status-pill status-danger">Profil de conformité incomplet</span>{% endif %}</td></tr>
+        <tr><th>Désinscription</th><td><span class="status-pill status-success">Lien inclus dans l'e-mail (voir version HTML/texte ci-dessous)</span></td></tr>
         <tr><th>Statut</th><td>
           {% if blocked %}<span class="status-pill status-danger">Bloqué — opposition ou adresse non exploitable</span>
           {% else %}<span class="status-pill status-success">Prêt</span>{% endif %}

@@ -7,53 +7,84 @@
   <div>
     <span class="eyebrow">CRM</span>
     <h1>Prospects</h1>
+    <p>{{ prospects|length }} prospect(s) sélectionné(s) pour la prospection.</p>
   </div>
   <div class="action-row">
     <a class="btn btn-outline-dark" href="{% url 'export_csv' %}?{{ request.GET.urlencode }}">CSV</a>
     <a class="btn btn-outline-dark" href="{% url 'export_xlsx' %}?{{ request.GET.urlencode }}">Excel</a>
-    <a class="btn btn-primary-custom" href="{% url 'prospect_create' %}">Ajouter</a>
+    <a class="btn btn-outline-dark" href="{% url 'prospect_create' %}">Ajouter manuellement</a>
+    <a class="btn btn-outline-dark" href="{% url 'prospect_import' %}">Import</a>
   </div>
 </section>
 
 <section class="container-fluid px-lg-4 pb-5">
-  <form class="filter-bar" method="get">
+  <form class="filter-bar compact" method="get">
     <input name="q" value="{{ request.GET.q }}" placeholder="Entreprise, secteur, ville ou domaine">
-    <input name="naf" value="{{ request.GET.naf }}" placeholder="Code NAF">
-    <input name="department" value="{{ request.GET.department }}" placeholder="Département">
-    <select name="status">
-      <option value="">Tous statuts</option>
-      {% for v,l in statuses %}
-        <option value="{{ v }}" {% if request.GET.status == v %}selected{% endif %}>{{ l }}</option>
-      {% endfor %}
-    </select>
-    <select name="min_score">
-      <option value="">Tous scores</option>
-      <option value="60">60+</option>
-      <option value="75">75+</option>
-      <option value="90">90+</option>
-    </select>
     <button class="btn btn-dark">Filtrer</button>
   </form>
 
-  <div class="prospect-grid mt-4">
-    {% for p in prospects %}
-      <article class="prospect-card {% if not p.prospecting_allowed %}disabled{% endif %}">
-        <div class="prospect-card-head">
-          <span>{{ p.get_status_display }}</span>
-          <strong>{{ p.priority_score }}/100</strong>
-        </div>
-        <h2>{{ p.name }}</h2>
-        <p>{{ p.sector|default:"Secteur inconnu" }}<br>{{ p.naf_code|default:"—" }} · {{ p.city|default:"—" }}</p>
-        <div class="mini-data">
-          <span>Email <b>{% if p.public_email %}Oui{% else %}Non{% endif %}</b></span>
-          <span>Tél. <b>{% if p.public_phone %}Oui{% else %}Non{% endif %}</b></span>
-          <span>Priorité <b>{{ p.priority_score }}</b></span>
-        </div>
-        <a href="{% url 'prospect_detail' p.pk %}">Ouvrir <i class="bi bi-arrow-up-right"></i></a>
-      </article>
-    {% empty %}
-      <p>Aucun résultat.</p>
+  <div class="action-row mt-3">
+    {% for opt in filter_options %}
+      <a class="btn btn-sm {% if active_filter == opt.key %}btn-primary-custom{% else %}btn-outline-dark{% endif %}"
+         href="?filter={{ opt.key }}{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}">{{ opt.label }} ({{ opt.count }})</a>
     {% endfor %}
   </div>
+
+  <form id="prospects-form" class="mt-4">
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="select-all-prospects"></th>
+            <th>Entreprise</th><th>Secteur</th><th>Ville</th><th>Site</th><th>Email</th>
+            <th>Score</th><th>Grade</th><th>Statut</th><th>Dernière action</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in prospects %}
+            <tr>
+              <td><input type="checkbox" class="prospect-checkbox" value="{{ p.pk }}"></td>
+              <td>{{ p.name }}</td>
+              <td>{{ p.sector|default:"—" }}</td>
+              <td>{{ p.city|default:"—" }}</td>
+              <td>{% if p.website %}<a href="{{ p.website }}" target="_blank"><i class="bi bi-check-circle text-success"></i></a>{% else %}—{% endif %}</td>
+              <td>{{ p.public_email|default:"—" }}</td>
+              <td>{{ p.predictneed_acquisition_score }}/100</td>
+              <td>{% if p.predictneed_grade %}<span class="grade-badge grade-{{ p.predictneed_grade }}">{{ p.predictneed_grade }}</span>{% else %}—{% endif %}</td>
+              <td>{{ p.get_predictneed_stage_display|default:p.get_status_display }}</td>
+              <td>{{ p.last_contacted_at|date:"d/m/Y"|default:"—" }}</td>
+              <td><a href="{% url 'prospect_detail' p.pk %}">Ouvrir <i class="bi bi-arrow-up-right"></i></a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="11">Aucun prospect pour ce filtre. Va dans « Trouver des prospects » pour en sélectionner.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="action-row">
+      <label class="d-flex align-items-center gap-2"><input type="checkbox" id="select-all-prospects-bottom"> Tout sélectionner</label>
+      <a id="create-campaign-link" class="btn btn-primary-custom" href="{% url 'campaign_create' %}">Créer une campagne</a>
+    </div>
+  </form>
 </section>
+<script>
+(() => {
+  const boxes = () => Array.from(document.querySelectorAll(".prospect-checkbox"));
+  const syncAll = (checked) => boxes().forEach((b) => { b.checked = checked; });
+  ["select-all-prospects", "select-all-prospects-bottom"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", (e) => syncAll(e.target.checked));
+  });
+  const link = document.getElementById("create-campaign-link");
+  if (link) {
+    link.addEventListener("click", (event) => {
+      const ids = boxes().filter((b) => b.checked).map((b) => b.value);
+      if (ids.length) {
+        event.preventDefault();
+        window.location.href = "{% url 'campaign_create' %}?prospects=" + ids.join(",");
+      }
+    });
+  }
+})();
+</script>
 {% endblock %}

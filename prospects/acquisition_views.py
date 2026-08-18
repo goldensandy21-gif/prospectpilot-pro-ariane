@@ -114,12 +114,63 @@ def acquisition_search(request):
     return render(request, "prospects/acquisition_search.html", {"form": form, "recent_runs": recent_runs})
 
 
+CANDIDATE_FILTERS = [
+    ("all", "Tous", lambda qs: qs),
+    ("with_email", "Avec e-mail", lambda qs: qs.exclude(contact_email="")),
+    ("with_site", "Avec site", lambda qs: qs.exclude(site_url="")),
+    ("no_email", "Sans e-mail", lambda qs: qs.filter(contact_email="")),
+    ("A", "A", lambda qs: qs.filter(grade="A")),
+    ("B", "B", lambda qs: qs.filter(grade="B")),
+    ("C", "C", lambda qs: qs.filter(grade="C")),
+    ("errors", "Erreurs", lambda qs: qs.filter(status="error")),
+    ("not_eligible", "Non éligibles", lambda qs: qs.filter(status="not_eligible")),
+]
+CANDIDATE_FILTER_FUNCS = {key: fn for key, _label, fn in CANDIDATE_FILTERS}
+
+
 @login_required
 def acquisition_search_run_detail(request, pk):
     search_run = get_object_or_404(CompanySearchRun, pk=pk)
+
+    if request.method == "POST":
+        selected_ids = request.POST.getlist("selected")
+        candidates_with_prospect = search_run.candidates.filter(
+            pk__in=selected_ids, prospect__isnull=False,
+        ).select_related("prospect")
+        added = 0
+        already_selected = 0
+        for candidate in candidates_with_prospect:
+            if candidate.prospect.selected_for_prospecting:
+                already_selected += 1
+                continue
+            candidate.prospect.selected_for_prospecting = True
+            candidate.prospect.selected_at = timezone.now()
+            candidate.prospect.save(update_fields=["selected_for_prospecting", "selected_at"])
+            added += 1
+        without_prospect = len(selected_ids) - candidates_with_prospect.count()
+        if added:
+            messages.success(request, f"{added} entreprise(s) ajoutée(s) aux Prospects.")
+        if already_selected:
+            messages.info(request, f"{already_selected} étaient déjà dans les Prospects.")
+        if without_prospect:
+            messages.warning(request, f"{without_prospect} candidat(s) pas encore assez avancé(s) pour être ajouté(s) (pas encore de site/analyse).")
+        if not selected_ids:
+            messages.error(request, "Sélectionne au moins une entreprise avant d'ajouter aux Prospects.")
+        return redirect("acquisition_search_run_detail", pk=pk)
+
+    active_filter = request.GET.get("filter", "all")
     candidates = search_run.candidates.select_related("prospect").order_by("-final_score", "-pre_score")
+    candidates = CANDIDATE_FILTER_FUNCS.get(active_filter, CANDIDATE_FILTER_FUNCS["all"])(candidates)
+
+    all_candidates = search_run.candidates.all()
+    filter_options = [
+        {"key": key, "label": label, "count": fn(all_candidates).count()}
+        for key, label, fn in CANDIDATE_FILTERS
+    ]
+
     return render(request, "prospects/acquisition_search_run_detail.html", {
         "search_run": search_run, "candidates": candidates[:300],
+        "active_filter": active_filter, "filter_options": filter_options,
     })
 
 
@@ -211,31 +262,43 @@ def campaign_list(request):
     return render(request, "prospects/campaign_list.html", {"campaigns": campaigns})
 
 
+GRADE_FILTERS = {
+    "A": ["A"],
+    "AB": ["A", "B"],
+    "ABC": ["A", "B", "C"],
+}
+
+
 @login_required
 def campaign_create(request):
     grade = request.GET.get("grade", "A")
     icp_id = request.GET.get("icp")
+    min_score = request.GET.get("min_score", "")
+    prospect_ids = [pid for pid in request.GET.get("prospects", "").split(",") if pid.isdigit()]
+
     # Mission 5, section 8 : seuls les prospects volontairement retenus
     # (section 3) sont proposables en campagne — jamais un simple candidat
     # technique du pipeline d'acquisition non encore choisi par l'utilisateur.
     base_qs = Prospect.objects.filter(selected_for_prospecting=True)
+    if prospect_ids:
+        base_qs = base_qs.filter(pk__in=prospect_ids)
     if icp_id:
         base_qs = base_qs.filter(predictneed_icp_id=icp_id)
     qs = base_qs.filter(predictneed_excluded=False, outbound_eligible=True)
-    if grade == "A":
-        qs = qs.filter(predictneed_grade="A")
-    elif grade == "AB":
-        qs = qs.filter(predictneed_grade__in=["A", "B"])
+    if grade in GRADE_FILTERS:
+        qs = qs.filter(predictneed_grade__in=GRADE_FILTERS[grade])
+    if min_score.isdigit():
+        qs = qs.filter(predictneed_acquisition_score__gte=int(min_score))
     qs = qs.order_by("-predictneed_acquisition_score")[:200]
 
     empty_state_reasons = None
     if request.method != "POST" and not qs.exists():
         graded_ok = base_qs.filter(predictneed_excluded=False, outbound_eligible=True)
         below_threshold = graded_ok
-        if grade == "A":
-            below_threshold = below_threshold.exclude(predictneed_grade="A")
-        elif grade == "AB":
-            below_threshold = below_threshold.exclude(predictneed_grade__in=["A", "B"])
+        if grade in GRADE_FILTERS:
+            below_threshold = below_threshold.exclude(predictneed_grade__in=GRADE_FILTERS[grade])
+        if min_score.isdigit():
+            below_threshold = below_threshold.filter(predictneed_acquisition_score__lt=int(min_score))
         empty_state_reasons = {
             "total_selected": base_qs.count(),
             "without_email": base_qs.filter(public_email="").count(),
@@ -275,7 +338,8 @@ def campaign_create(request):
         })
 
     return render(request, "prospects/campaign_create.html", {
-        "form": form, "prospects": qs, "grade": grade,
+        "form": form, "prospects": qs, "grade": grade, "min_score": min_score,
+        "prospects_param": request.GET.get("prospects", ""),
         "empty_state_reasons": empty_state_reasons,
     })
 

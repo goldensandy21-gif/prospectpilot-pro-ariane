@@ -5,15 +5,19 @@
 {% block content %}
 <section class="prospect-hero">
   <div>
-    <span class="eyebrow">{{ prospect.get_status_display }}</span>
+    <span class="eyebrow">{{ prospect.get_status_display }}{% if prospect.selected_for_prospecting %} · Sélectionné pour la prospection{% endif %}</span>
     <h1>{{ prospect.name }}</h1>
     <p>{{ prospect.sector }} · {{ prospect.naf_code }} · {{ prospect.city }}{% if prospect.employee_band %} · {{ prospect.employee_band }} salariés{% endif %}</p>
+    <p class="legal-note">
+      {% if prospect.public_email %}<i class="bi bi-envelope"></i> {{ prospect.public_email }}{% else %}Aucun e-mail public connu{% endif %}
+      {% if prospect.public_phone %} · <i class="bi bi-telephone"></i> {{ prospect.public_phone }}{% endif %}
+    </p>
     <div class="action-row">
       <a class="btn btn-outline-dark" href="{% url 'prospect_edit' prospect.pk %}">Modifier</a>
       {% if predictneed_campaign_membership %}
-        <a class="btn btn-primary-custom" href="{% url 'campaign_preview' predictneed_campaign_membership.campaign_id %}?cp={{ predictneed_campaign_membership.pk }}">Préparer l'e-mail PredictNeed IA</a>
+        <a class="btn btn-primary-custom" href="{% url 'campaign_preview' predictneed_campaign_membership.campaign_id %}?cp={{ predictneed_campaign_membership.pk }}">Préparer un e-mail PredictNeed</a>
       {% elif prospect.outbound_eligible and not prospect.predictneed_excluded %}
-        <a class="btn btn-primary-custom" href="{% url 'campaign_create' %}?icp={{ prospect.predictneed_icp_id|default:'' }}">Ajouter à une campagne PredictNeed</a>
+        <a class="btn btn-primary-custom" href="{% url 'campaign_create' %}?icp={{ prospect.predictneed_icp_id|default:'' }}">Préparer un e-mail PredictNeed</a>
       {% endif %}
       {% if prospect.website %}
         <a class="btn btn-outline-dark" href="{{ prospect.website }}" target="_blank">Voir le site</a>
@@ -364,17 +368,12 @@
     </div>
 
     <div>
-      <div class="panel email-prospect-panel">
-        <div class="panel-head">
-          <div>
-            <span class="eyebrow">E-MAIL PROSPECTPILOT (PROSPECTION CLASSIQUE)</span>
-            <h2>Modèle ProspectPilot Pro</h2>
-          </div>
-          {% if prospect.public_email %}
-            <span class="email-recipient">{{ prospect.public_email }}</span>
-          {% endif %}
-        </div>
-        <p class="legal-note">Ce modèle promeut ProspectPilot Pro lui-même — distinct des campagnes PredictNeed IA (voir « Préparer l'e-mail PredictNeed IA » en haut de page ou l'onglet Campagnes).</p>
+      <details class="panel email-prospect-panel">
+        <summary style="cursor:pointer;">
+          <span class="eyebrow">OUTIL HISTORIQUE (HORS PARCOURS PRINCIPAL)</span>
+          <h2 style="display:inline;font-size:1.1rem;">Ancien modèle ProspectPilot Pro</h2>
+        </summary>
+        <p class="legal-note mt-2">Ce modèle fait la promotion de ProspectPilot Pro lui-même, pas de PredictNeed IA — conservé uniquement pour compatibilité historique. Pour contacter ce prospect, utilise « Préparer un e-mail PredictNeed » en haut de page.</p>
         {% if not prospect.public_email %}
           <div class="human-alert mt-2">Adresse e-mail manquante. Le modèle est prêt, mais l'envoi est bloqué.</div>
         {% endif %}
@@ -392,9 +391,8 @@
         <div class="email-mini-frame">
           {{ email_html|safe }}
         </div>
-        <a class="btn btn-primary-custom w-100 mt-3" href="{% url 'email_preview' prospect.pk %}">Modifier et envoyer l'e-mail</a>
-        <p class="legal-note mt-3">Le prospect reste dans le CRM. La page suivante prépare l'e-mail, affiche l'aperçu, envoie et ajoute l'historique.</p>
-      </div>
+        <a class="btn btn-outline-dark w-100 mt-3" href="{% url 'email_preview' prospect.pk %}">Modifier et envoyer (ancien outil)</a>
+      </details>
 
       <div class="panel mt-4">
         <span class="eyebrow">HISTORIQUE E-MAILS</span>

@@ -87,7 +87,7 @@ class CockpitPagesRenderTests(LoggedInTestCase):
         response = self.client.get(reverse("prospect_detail", args=[self.prospect.pk]))
         expected_url = reverse("campaign_preview", args=[self.campaign.pk]) + f"?cp={self.member.pk}"
         self.assertContains(response, expected_url)
-        self.assertContains(response, "PredictNeed IA</a>")
+        self.assertContains(response, "Préparer un e-mail PredictNeed</a>")
 
 
 class EmptyStateTests(LoggedInTestCase):

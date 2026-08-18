@@ -1,7 +1,65 @@
 {% extends "base.html" %}{% block title %}Dashboard | ProspectPilot Pro{% endblock %}{% block content %}
-<section class="page-intro"><div><span class="eyebrow">PILOTAGE</span><h1>Les meilleurs prospects, au bon moment.</h1></div><a class="btn btn-primary-custom" href="{% url 'company_search' %}">Rechercher des entreprises</a></section>
+<section class="section-header">
+  <div><span class="eyebrow">COCKPIT COMMERCIAL PREDICTNEED IA</span><h1>Les meilleurs prospects, au bon moment.</h1></div>
+  <a class="btn btn-primary-custom" href="{% url 'acquisition_search' %}">Trouver des prospects</a>
+</section>
+<p class="legal-note px-lg-4"><a href="{% url 'acquisition_intelligence' %}">Voir l'analyse détaillée (funnel complet, concurrents, tous les prospects prioritaires)</a></p>
 <section class="container-fluid px-lg-4 pb-5">
-<div class="metric-grid"><article><span>Prospects</span><strong>{{ prospect_count }}</strong></article><article><span>Prioritaires</span><strong>{{ qualified_count }}</strong></article><article><span>Contactés</span><strong>{{ contacted_count }}</strong></article><article><span>Clients</span><strong>{{ won_count }}</strong></article><article><span>Oppositions</span><strong>{{ optout_count }}</strong></article><article><span>Score moyen</span><strong>{{ avg_score }}</strong></article></div>
-<div class="dashboard-grid mt-4"><div class="panel"><div class="panel-head"><div><span class="eyebrow">À TRAITER</span><h2>Prospects prioritaires</h2></div><a href="{% url 'prospect_list' %}">Tout voir</a></div><div class="table-responsive"><table class="table align-middle"><thead><tr><th>Entreprise</th><th>NAF</th><th>Ville</th><th>Site</th><th>Priorité</th><th></th></tr></thead><tbody>{% for p in top_prospects %}<tr><td><strong>{{ p.name }}</strong><small>{{ p.sector }}</small></td><td>{{ p.naf_code|default:"—" }}</td><td>{{ p.city }}</td><td>{% if p.website %}<i class="bi bi-check-circle text-success"></i>{% else %}<i class="bi bi-dash-circle"></i>{% endif %}</td><td><span class="score">{{ p.priority_score }}</span></td><td><a href="{% url 'prospect_detail' p.pk %}"><i class="bi bi-arrow-right"></i></a></td></tr>{% empty %}<tr><td colspan="6">Aucun prospect.</td></tr>{% endfor %}</tbody></table></div></div>
-<div class="panel"><span class="eyebrow">ACTIVITÉ</span><h2>Dernières interactions</h2><div class="activity-list">{% for log in recent_contacts %}<div><strong>{{ log.prospect.name }}</strong><span>{{ log.get_outcome_display }} · {{ log.contacted_at|date:"d/m H:i" }}</span></div>{% empty %}<p>Aucune interaction.</p>{% endfor %}</div></div></div>
+  <div class="kpi-row">
+    <div class="kpi-card"><span class="kpi-value">{{ selected_count }}</span><span class="kpi-label">Prospects retenus</span></div>
+    <div class="kpi-card kpi-emphasis"><span class="kpi-value">{{ ready_count }}</span><span class="kpi-label">Prêts à contacter</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ contacted_count }}</span><span class="kpi-label">Contactés</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ clicks_count }}</span><span class="kpi-label">Clics</span></div>
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ signups_count }}</span><span class="kpi-label">Inscrits PredictNeed</span></div>
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ clients_count }}</span><span class="kpi-label">Clients</span></div>
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ mrr_total }} €</span><span class="kpi-label">MRR attribué</span></div>
+  </div>
+
+  <div class="dashboard-grid mt-4">
+    <div class="panel">
+      <div class="panel-head">
+        <div><span class="eyebrow">PRIORITAIRES</span><h2>Prospects à contacter (grade A/B)</h2></div>
+        <a href="{% url 'prospect_list' %}">Tout voir</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table align-middle commercial-table">
+          <thead><tr><th>Entreprise</th><th>Ville</th><th>Score PredictNeed</th><th>Grade</th><th>Stade</th><th></th></tr></thead>
+          <tbody>
+            {% for p in priority_prospects %}
+              <tr>
+                <td><strong>{{ p.name }}</strong><small>{{ p.sector }}</small></td>
+                <td>{{ p.city }}</td>
+                <td><span class="score">{{ p.predictneed_acquisition_score }}</span></td>
+                <td><span class="grade-badge grade-{{ p.predictneed_grade }}">{{ p.predictneed_grade }}</span></td>
+                <td>{{ p.get_predictneed_stage_display }}</td>
+                <td><a href="{% url 'prospect_detail' p.pk %}"><i class="bi bi-arrow-right"></i></a></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6">Aucun prospect prioritaire pour l'instant — va dans « Trouver des prospects ».</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel">
+      <span class="eyebrow">CAMPAGNES</span>
+      <h2>Campagnes actives</h2>
+      <div class="activity-list">
+        {% for c in active_campaigns %}
+          <div><strong><a href="{% url 'campaign_detail' c.pk %}">{{ c.name }}</a></strong><span>{{ c.product.name }} · {{ c.campaign_prospects.count }} prospect(s)</span></div>
+        {% empty %}
+          <p>Aucune campagne active — <a href="{% url 'campaign_list' %}">voir les campagnes</a>.</p>
+        {% endfor %}
+      </div>
+      <span class="eyebrow mt-4 d-block">ACTIVITÉ</span>
+      <h2>Dernières interactions</h2>
+      <div class="activity-list">
+        {% for log in recent_contacts %}
+          <div><strong>{{ log.prospect.name }}</strong><span>{{ log.get_outcome_display }} · {{ log.contacted_at|date:"d/m H:i" }}</span></div>
+        {% empty %}
+          <p>Aucune interaction.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
 </section>{% endblock %}

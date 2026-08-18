@@ -6,7 +6,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.files.base import ContentFile
-from django.db.models import Avg, Q
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -47,13 +47,31 @@ from .tasks import (
     enrich_prospect_task,
 )
 
+PROSPECT_LIST_FILTERS = [
+    ("all", "Tous", lambda qs: qs),
+    ("with_email", "Avec e-mail", lambda qs: qs.exclude(public_email="")),
+    ("A", "A", lambda qs: qs.filter(predictneed_grade="A")),
+    ("B", "B", lambda qs: qs.filter(predictneed_grade="B")),
+    ("C", "C", lambda qs: qs.filter(predictneed_grade="C")),
+    ("ready", "Prêts à contacter", lambda qs: qs.filter(predictneed_stage="ready_to_contact")),
+    ("contacted", "Contactés", lambda qs: qs.filter(predictneed_stage__in=["contacted", "engaged"])),
+    ("signed_up", "Inscrits", lambda qs: qs.filter(predictneed_stage__in=["signed_up", "activated"])),
+    ("paying", "Clients", lambda qs: qs.filter(predictneed_stage="paying")),
+    ("opposition", "Opposition", lambda qs: qs.filter(status="do_not_contact")),
+]
+PROSPECT_LIST_FILTER_FUNCS = {key: fn for key, _label, fn in PROSPECT_LIST_FILTERS}
+
+
 def filtered_prospects(request):
-    qs = Prospect.objects.all()
+    # Mission 5, section 4 : la liste principale ne montre par défaut que les
+    # prospects volontairement retenus pour la prospection (historiques inclus,
+    # voir migration 0005) — jamais les simples candidats techniques du
+    # pipeline d'acquisition non encore sélectionnés.
+    qs = Prospect.objects.filter(selected_for_prospecting=True)
     q = request.GET.get("q", "").strip()
-    status = request.GET.get("status", "")
     department = request.GET.get("department", "")
     naf = request.GET.get("naf", "")
-    min_score = request.GET.get("min_score", "")
+    quick_filter = request.GET.get("filter", "all")
     if q:
         qs = qs.filter(
             Q(name__icontains=q)
@@ -61,51 +79,51 @@ def filtered_prospects(request):
             | Q(city__icontains=q)
             | Q(website__icontains=q)
         )
-    if status:
-        qs = qs.filter(status=status)
     if department:
         qs = qs.filter(department=department)
     if naf:
         qs = qs.filter(naf_code__startswith=naf)
-    if min_score.isdigit():
-        qs = qs.filter(priority_score__gte=int(min_score))
+    qs = PROSPECT_LIST_FILTER_FUNCS.get(quick_filter, PROSPECT_LIST_FILTER_FUNCS["all"])(qs)
     return qs
 
 @login_required
 def dashboard(request):
-    qs = Prospect.objects.all()
-    return render(
-        request,
-        "prospects/dashboard.html",
-        {
-            "prospect_count": qs.count(),
-            "qualified_count": qs.filter(priority_score__gte=60).count(),
-            "contacted_count": qs.filter(
-                status__in=[
-                    "contacted", "replied", "meeting",
-                    "proposal", "won",
-                ]
-            ).count(),
-            "won_count": qs.filter(status="won").count(),
-            "optout_count": qs.filter(status="do_not_contact").count(),
-            "avg_score": round(
-                qs.aggregate(v=Avg("priority_score"))["v"] or 0
-            ),
-            "top_prospects": qs.filter(prospecting_allowed=True)[:10],
-            "recent_contacts": ContactLog.objects.select_related(
-                "prospect"
-            )[:8],
-        },
-    )
+    # Mission 5, section 6 — cockpit commercial unique : le score/stade
+    # PredictNeed est le système principal, plus l'ancien priority_score.
+    from django.db.models import Sum
+    from .models import Campaign, ConversionEvent, EngagementEvent, RevenueAttribution
+
+    selected_qs = Prospect.objects.filter(selected_for_prospecting=True)
+    context = {
+        "selected_count": selected_qs.count(),
+        "ready_count": selected_qs.filter(predictneed_stage="ready_to_contact").count(),
+        "contacted_count": selected_qs.filter(predictneed_stage__in=["contacted", "engaged"]).count(),
+        "clicks_count": EngagementEvent.objects.filter(event_type="link_clicked").count(),
+        "signups_count": ConversionEvent.objects.filter(event_type="signup").count(),
+        "clients_count": ConversionEvent.objects.filter(event_type="paying").count(),
+        "mrr_total": RevenueAttribution.objects.aggregate(v=Sum("mrr"))["v"] or 0,
+        "priority_prospects": selected_qs.filter(predictneed_grade__in=["A", "B"], predictneed_excluded=False)
+            .order_by("-predictneed_acquisition_score")[:10],
+        "active_campaigns": Campaign.objects.filter(status="active").select_related("product")[:8],
+        "recent_contacts": ContactLog.objects.select_related("prospect")[:8],
+    }
+    return render(request, "prospects/dashboard.html", context)
 
 @login_required
 def prospect_list(request):
+    base_qs = Prospect.objects.filter(selected_for_prospecting=True)
+    filter_options = [
+        {"key": key, "label": label, "count": fn(base_qs).count()}
+        for key, label, fn in PROSPECT_LIST_FILTERS
+    ]
     return render(
         request,
         "prospects/list.html",
         {
             "prospects": filtered_prospects(request),
             "statuses": Prospect.STATUS_CHOICES,
+            "filter_options": filter_options,
+            "active_filter": request.GET.get("filter", "all"),
         },
     )
 

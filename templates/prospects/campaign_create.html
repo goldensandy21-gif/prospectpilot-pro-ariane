@@ -16,9 +16,16 @@
       <div class="panel">
         <h2>Grade</h2>
         <div class="action-row">
-          <a class="btn btn-sm btn-outline-dark {% if grade == 'A' %}active{% endif %}" href="?grade=A">A uniquement</a>
-          <a class="btn btn-sm btn-outline-dark {% if grade == 'AB' %}active{% endif %}" href="?grade=AB">A + B</a>
+          <a class="btn btn-sm btn-outline-dark {% if grade == 'A' %}active{% endif %}" href="?grade=A{% if prospects_param %}&prospects={{ prospects_param }}{% endif %}">A uniquement</a>
+          <a class="btn btn-sm btn-outline-dark {% if grade == 'AB' %}active{% endif %}" href="?grade=AB{% if prospects_param %}&prospects={{ prospects_param }}{% endif %}">A + B</a>
+          <a class="btn btn-sm btn-outline-dark {% if grade == 'ABC' %}active{% endif %}" href="?grade=ABC{% if prospects_param %}&prospects={{ prospects_param }}{% endif %}">A + B + C</a>
         </div>
+        <form method="get" class="action-row mt-2">
+          {% if prospects_param %}<input type="hidden" name="prospects" value="{{ prospects_param }}">{% endif %}
+          <input type="hidden" name="grade" value="{{ grade }}">
+          <input type="number" name="min_score" value="{{ min_score }}" placeholder="Seuil personnalisé (0-100)" style="max-width:220px;padding:.5rem;border:1px solid var(--line);">
+          <button class="btn btn-sm btn-outline-dark" type="submit">Appliquer le seuil</button>
+        </form>
       </div>
     </div>
 
@@ -26,19 +33,20 @@
       <h2>Prospects</h2>
       <div class="table-responsive">
         <table class="table align-middle">
-          <thead><tr><th></th><th>Entreprise</th><th>Score</th><th>Grade</th><th>Email</th><th>Angle recommandé</th></tr></thead>
+          <thead><tr><th></th><th>Entreprise</th><th>Email</th><th>Score</th><th>Grade</th><th>ICP</th><th>Statut</th></tr></thead>
           <tbody>
             {% for p in prospects %}
               <tr>
                 <td><input type="checkbox" name="selected" value="{{ p.pk }}" checked></td>
                 <td>{{ p.name }}</td>
-                <td>{{ p.predictneed_acquisition_score }}/100</td>
-                <td><span class="badge text-bg-dark">{{ p.predictneed_grade }}</span></td>
                 <td>{{ p.public_email }}</td>
-                <td>{{ p.agent_briefs.first.recommended_angle|default:""|truncatechars:80 }}</td>
+                <td>{{ p.predictneed_acquisition_score }}/100</td>
+                <td><span class="grade-badge grade-{{ p.predictneed_grade }}">{{ p.predictneed_grade }}</span></td>
+                <td>{{ p.predictneed_icp|default:"—" }}</td>
+                <td>{{ p.get_predictneed_stage_display|default:p.get_status_display }}</td>
               </tr>
             {% empty %}
-              <tr><td colspan="6">
+              <tr><td colspan="7">
                 {% if empty_state_reasons %}
                   {% if empty_state_reasons.total_selected == 0 %}
                     Aucun prospect sélectionné pour la prospection pour l'instant. Va dans « Trouver des prospects », lance une recherche, puis ajoute des entreprises aux Prospects.

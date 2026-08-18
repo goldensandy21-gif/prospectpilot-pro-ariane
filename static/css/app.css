@@ -244,3 +244,19 @@ body.menu-open{overflow:hidden!important}
   .score-bar-row{grid-template-columns:96px 1fr 40px}
   .section-header{padding:1.6rem 5vw 1rem}
 }
+
+/* Mission 5 partie 2 — menu simplifié, groupes "Trouver des prospects" /
+   "Réglages" : sous-liens toujours visibles (pas de survol/clic caché),
+   additif uniquement, ne modifie aucune règle existante. */
+.app-logout-form{margin:0}
+.app-menu-links li.app-menu-group{display:flex!important;flex-direction:column;padding:0}
+.app-menu-group-title{font-size:.62rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:.6rem 0 .2rem}
+.app-menu-group ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+@media(min-width:1200px){
+  .app-menu-group{position:relative}
+  .app-menu-group ul{flex-direction:row;gap:.5rem;align-items:center}
+  .app-menu-group-title{padding:0 .3rem 0 0}
+}
+@media(max-width:1199px){
+  .app-menu-group ul .nav-link{padding-left:1rem!important;font-weight:600!important}
+}

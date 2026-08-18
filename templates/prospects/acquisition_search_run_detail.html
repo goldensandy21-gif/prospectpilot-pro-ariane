@@ -41,29 +41,74 @@
   {% endif %}
 
   <div class="panel mt-4">
-    <h2>Candidats</h2>
-    <div class="table-responsive">
-      <table class="table align-middle">
-        <thead><tr><th>Entreprise</th><th>Statut</th><th>Pré-score</th><th>Score final</th><th>Grade</th><th>Site</th><th>Email</th></tr></thead>
-        <tbody>
-          {% for c in candidates %}
-            <tr>
-              <td>
-                {% if c.prospect %}<a href="{% url 'prospect_detail' c.prospect.pk %}">{{ c.name }}</a>{% else %}{{ c.name }}{% endif %}
-              </td>
-              <td><span class="badge text-bg-secondary">{{ c.get_status_display }}</span></td>
-              <td>{{ c.pre_score }}</td>
-              <td>{{ c.final_score }}</td>
-              <td>{% if c.grade %}<span class="badge text-bg-dark">{{ c.grade }}</span>{% else %}—{% endif %}</td>
-              <td>{% if c.site_url %}<a href="{{ c.site_url }}" target="_blank">{{ c.site_url|truncatechars:30 }}</a>{% else %}—{% endif %}</td>
-              <td>{{ c.contact_email|default:"—" }}</td>
-            </tr>
-          {% empty %}
-            <tr><td colspan="7">Aucun candidat pour le moment.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <div class="panel-head">
+      <div>
+        <span class="eyebrow">CANDIDATS</span>
+        <h2>Résultats</h2>
+      </div>
     </div>
+    <div class="action-row mb-3">
+      {% for opt in filter_options %}
+        <a class="btn btn-sm {% if active_filter == opt.key %}btn-primary-custom{% else %}btn-outline-dark{% endif %}"
+           href="?filter={{ opt.key }}">{{ opt.label }} ({{ opt.count }})</a>
+      {% endfor %}
+    </div>
+
+    <form method="post" id="candidates-form">
+      {% csrf_token %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="select-all-candidates"></th>
+              <th>Entreprise</th><th>Ville</th><th>Site</th><th>Email</th><th>Téléphone</th>
+              <th>Score</th><th>Grade</th><th>Statut</th><th>Détail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in candidates %}
+              <tr>
+                <td>
+                  {% if c.prospect %}<input type="checkbox" name="selected" value="{{ c.pk }}" class="candidate-checkbox" {% if c.prospect.selected_for_prospecting %}checked disabled{% endif %}>{% endif %}
+                </td>
+                <td>
+                  {% if c.prospect %}<a href="{% url 'prospect_detail' c.prospect.pk %}">{{ c.name }}</a>{% else %}{{ c.name }}{% endif %}
+                  {% if c.prospect.selected_for_prospecting %}<br><span class="status-pill status-success">Déjà dans les Prospects</span>{% endif %}
+                </td>
+                <td>{{ c.raw_data.city|default:"—" }}</td>
+                <td>{% if c.site_url %}<a href="{{ c.site_url }}" target="_blank">{{ c.site_url|truncatechars:28 }}</a>{% else %}—{% endif %}</td>
+                <td>{{ c.contact_email|default:"—" }}</td>
+                <td>{{ c.prospect.public_phone|default:"—" }}</td>
+                <td>{{ c.final_score|default:c.pre_score }}</td>
+                <td>{% if c.grade %}<span class="grade-badge grade-{{ c.grade }}">{{ c.grade }}</span>{% else %}—{% endif %}</td>
+                <td><span class="badge text-bg-secondary">{{ c.get_status_display }}</span></td>
+                <td>
+                  {% if c.status == "error" %}{{ c.error|truncatechars:60 }}
+                  {% elif c.outbound_ineligible_reason %}{{ c.outbound_ineligible_reason|truncatechars:60 }}
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="10">Aucun candidat pour ce filtre.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="action-row">
+        <label class="d-flex align-items-center gap-2"><input type="checkbox" id="select-all-candidates-bottom"> Tout sélectionner</label>
+        <button type="submit" class="btn btn-primary-custom">AJOUTER AUX PROSPECTS</button>
+      </div>
+    </form>
   </div>
 </section>
+<script>
+(() => {
+  const boxes = () => Array.from(document.querySelectorAll(".candidate-checkbox:not(:disabled)"));
+  const syncAll = (checked) => boxes().forEach((b) => { b.checked = checked; });
+  ["select-all-candidates", "select-all-candidates-bottom"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", (e) => syncAll(e.target.checked));
+  });
+})();
+</script>
 {% endblock %}
