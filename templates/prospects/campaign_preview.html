@@ -1,37 +1,70 @@
 {% extends "base.html" %}
 {% block title %}Aperçu — {{ campaign.name }} | ProspectPilot Pro{% endblock %}
 {% block content %}
-<section class="page-intro">
+<section class="section-header">
   <div><span class="eyebrow">APERÇU E-MAIL</span><h1>{{ campaign.name }}</h1></div>
   <div class="action-row"><a class="btn btn-outline-dark" href="{% url 'campaign_detail' campaign.pk %}">Retour à la campagne</a></div>
 </section>
 <section class="container-fluid px-lg-4 pb-5">
+  {% if members|length > 1 %}
+    <div class="cockpit-card mb-4">
+      <form method="get" class="d-flex align-items-center gap-2">
+        <label class="mb-0 fw-bold" for="cp-select">Prospect à prévisualiser :</label>
+        <select id="cp-select" name="cp" class="form-select" style="max-width:360px;" onchange="this.form.submit()">
+          {% for m in members %}
+            <option value="{{ m.pk }}" {% if m.pk == member.pk %}selected{% endif %}>{{ m.prospect.name }} — {{ m.grade }} ({{ m.acquisition_score_snapshot }}/100)</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  {% endif %}
+
   <div class="search-layout">
-    <div class="panel">
-      <h2>Détails d'envoi</h2>
-      <table class="table">
+    <div class="cockpit-card">
+      <h2 class="h5 mb-3">Détails d'envoi</h2>
+      <table class="table commercial-table mb-0">
         <tr><th>Expéditeur</th><td>{{ campaign.product.display_sender_identity }}</td></tr>
         <tr><th>Reply-To</th><td>{{ campaign.product.reply_to_email }}</td></tr>
+        <tr><th>Entreprise</th><td>{{ member.prospect.name }}</td></tr>
         <tr><th>Destinataire</th><td>{{ member.prospect.public_email|default:"—" }}</td></tr>
-        <tr><th>Type</th><td>
-          {% for e in member.prospect.public_emails.all %}{% if e.email == member.prospect.public_email %}{{ e.get_email_type_display }}{% endif %}{% endfor %}
-        </td></tr>
-        <tr><th>Source</th><td>{{ provenance.source_name|default:"non déterminée" }}{% if provenance.source_url %} — <a href="{{ provenance.source_url }}" target="_blank">source</a>{% endif %}</td></tr>
+        <tr><th>Type</th><td>{{ provenance.email_type|default:"Type inconnu (aucune preuve de collecte enregistrée)" }}</td></tr>
+        <tr><th>Confiance</th><td>{% if provenance.confidence %}{{ provenance.confidence }}/100{% else %}—{% endif %}</td></tr>
+        <tr><th>Source</th><td>{{ provenance.source_name|default:"non déterminée" }}{% if provenance.source_url %} — <a href="{{ provenance.source_url }}" target="_blank" rel="noopener">voir la source</a>{% endif %}</td></tr>
         <tr><th>Objet</th><td>{{ subject }}</td></tr>
+        <tr><th>CTA → destination PredictNeed</th><td>{% if destination_url %}<a href="{{ destination_url }}" target="_blank" rel="noopener">{{ destination_url|truncatechars:70 }}</a>{% else %}<span class="status-pill status-danger">URL non configurée dans ProductProfile</span>{% endif %}</td></tr>
         <tr><th>Statut</th><td>
-          {% if blocked %}<span class="badge text-bg-danger">Bloqué</span> — opposition ou adresse non exploitable.
-          {% else %}<span class="badge text-bg-success">Prêt</span>{% endif %}
+          {% if blocked %}<span class="status-pill status-danger">Bloqué — opposition ou adresse non exploitable</span>
+          {% else %}<span class="status-pill status-success">Prêt</span>{% endif %}
         </td></tr>
       </table>
     </div>
-    <div class="panel">
-      <h2>Version texte</h2>
+    <div class="cockpit-card">
+      <h2 class="h5 mb-3">Version texte</h2>
       <pre style="white-space:pre-wrap;font-size:13px;">{{ text }}</pre>
     </div>
   </div>
-  <div class="panel mt-4">
-    <h2>Version HTML</h2>
-    <iframe srcdoc="{{ html }}" style="width:100%;height:520px;border:1px solid #dee2e6;border-radius:8px;"></iframe>
+
+  <div class="cockpit-card mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 class="h5 mb-0">Version HTML</h2>
+      <div class="btn-group btn-group-sm" role="group">
+        <button type="button" class="btn btn-outline-dark active" data-preview-size="desktop">Desktop</button>
+        <button type="button" class="btn btn-outline-dark" data-preview-size="mobile">Mobile</button>
+      </div>
+    </div>
+    <iframe id="email-preview-frame" srcdoc="{{ html }}" style="width:100%;height:560px;border:1px solid #dee2e6;border-radius:10px;transition:max-width .2s ease;"></iframe>
   </div>
 </section>
+<script>
+document.querySelectorAll('[data-preview-size]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    document.querySelectorAll('[data-preview-size]').forEach(function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    var frame = document.getElementById('email-preview-frame');
+    frame.style.maxWidth = btn.dataset.previewSize === 'mobile' ? '390px' : '100%';
+    frame.style.margin = btn.dataset.previewSize === 'mobile' ? '0 auto' : '0';
+    frame.style.display = 'block';
+  });
+});
+</script>
 {% endblock %}

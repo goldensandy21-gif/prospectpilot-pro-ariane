@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Conversions & Revenus | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="section-header">
+  <div>
+    <span class="eyebrow">CONVERSIONS &amp; REVENUS</span>
+    <h1>Quels prospects sont devenus clients PredictNeed ?</h1>
+    <p>Données reçues via la liaison ProspectPilot ↔ PredictNeed IA (webhook HMAC) — aucun chiffre estimé.</p>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="kpi-row mb-4">
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ clients_total }}</span><span class="kpi-label">Clients PredictNeed</span></div>
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ mrr_total }} €</span><span class="kpi-label">MRR total attribué</span></div>
+  </div>
+
+  <div class="search-layout mb-4">
+    <div class="cockpit-card">
+      <h2 class="h5 mb-3">Revenu par ICP</h2>
+      {% if by_icp %}
+        <table class="table commercial-table mb-0">
+          <thead><tr><th>ICP</th><th>Clients</th><th>MRR</th></tr></thead>
+          <tbody>
+            {% for row in by_icp %}
+              <tr><td>{{ row.icp__name }}</td><td>{{ row.clients }}</td><td>{{ row.mrr }} €</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="empty-state"><p>Les conversions provenant de PredictNeed apparaîtront ici, réparties par ICP.</p></div>
+      {% endif %}
+    </div>
+    <div class="cockpit-card">
+      <h2 class="h5 mb-3">Conversion par grade</h2>
+      {% if by_grade %}
+        <table class="table commercial-table mb-0">
+          <thead><tr><th>Grade</th><th>Prospects</th><th>Contactés</th><th>Clients</th></tr></thead>
+          <tbody>
+            {% for row in by_grade %}
+              <tr><td><span class="grade-badge grade-{{ row.grade }}">{{ row.grade }}</span></td><td>{{ row.total }}</td><td>{{ row.contacted }}</td><td>{{ row.clients }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="empty-state"><p>Aucune campagne n'a encore de prospects gradés.</p></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="cockpit-card mb-4">
+    <h2 class="h5 mb-3">Revenu par campagne</h2>
+    {% if by_campaign %}
+      <table class="table commercial-table mb-0">
+        <thead><tr><th>Campagne</th><th>ICP</th><th>Envoyés</th><th>Clics</th><th>Inscriptions</th><th>Clients</th><th>MRR</th></tr></thead>
+        <tbody>
+          {% for c in by_campaign %}
+            <tr>
+              <td><a href="{% url 'campaign_detail' c.pk %}">{{ c.name }}</a></td>
+              <td>{{ c.icp|default:"—" }}</td>
+              <td>{{ c.metrics.sent }}</td>
+              <td>{{ c.metrics.clicks }}</td>
+              <td>{{ c.metrics.signups }}</td>
+              <td>{{ c.metrics.clients }}</td>
+              <td>{{ c.metrics.mrr }} €</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty-state"><p>Aucune campagne n'a encore généré de conversion.</p></div>
+    {% endif %}
+  </div>
+
+  <div class="cockpit-card">
+    <h2 class="h5 mb-3">Journal des conversions</h2>
+    {% if conversions %}
+      <table class="table commercial-table mb-0">
+        <thead><tr><th>Date</th><th>Entreprise</th><th>Campagne</th><th>Type</th><th>Référence</th></tr></thead>
+        <tbody>
+          {% for c in conversions %}
+            <tr>
+              <td>{{ c.occurred_at|date:"d/m/Y H:i" }}</td>
+              <td><a href="{% url 'prospect_detail' c.prospect_id %}">{{ c.prospect.name }}</a></td>
+              <td>{{ c.campaign|default:"—" }}</td>
+              <td><span class="status-pill {% if c.event_type == 'paying' %}status-success{% elif c.event_type == 'cancelled' %}status-danger{% else %}status-muted{% endif %}">{{ c.get_event_type_display }}</span></td>
+              <td>{{ c.external_reference|default:"—" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty-state">
+        <div class="empty-state-title">Aucune conversion enregistrée.</div>
+        <p>Les conversions provenant de PredictNeed (inscription, abonnement) apparaîtront ici automatiquement.</p>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

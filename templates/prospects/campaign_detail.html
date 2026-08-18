@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ campaign.name }} | ProspectPilot Pro{% endblock %}
 {% block content %}
-<section class="page-intro">
+<section class="section-header">
   <div>
     <span class="eyebrow">{{ campaign.get_status_display }}</span>
     <h1>{{ campaign.name }}</h1>
@@ -22,8 +22,17 @@
 </section>
 
 <section class="container-fluid px-lg-4 pb-5">
-  <div class="panel">
-    <h2>Envoyer un e-mail de test</h2>
+  <div class="kpi-row mb-4">
+    <div class="kpi-card"><span class="kpi-value">{{ members|length }}</span><span class="kpi-label">Prospects</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ performance.sent }}</span><span class="kpi-label">E-mails envoyés</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ performance.clicks }}</span><span class="kpi-label">Clics</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ performance.signups }}</span><span class="kpi-label">Inscriptions</span></div>
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ performance.clients }}</span><span class="kpi-label">Clients</span></div>
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ performance.mrr }} €</span><span class="kpi-label">MRR</span></div>
+  </div>
+
+  <div class="cockpit-card mb-4">
+    <h2 class="h5 mb-3">Envoyer un e-mail de test</h2>
     <form method="post" action="{% url 'campaign_send_test' campaign.pk %}" class="d-flex gap-2">
       {% csrf_token %}
       <input type="email" name="test_email" class="form-control" placeholder="ton-adresse@exemple.fr" required style="max-width:320px;">
@@ -32,25 +41,30 @@
     <p class="legal-note mt-2">Un e-mail de test ne modifie ni le statut du prospect, ni son score, ni la campagne.</p>
   </div>
 
-  <div class="panel mt-4">
-    <h2>Prospects ({{ members.count }})</h2>
-    <div class="table-responsive">
-      <table class="table align-middle">
-        <thead><tr><th>Entreprise</th><th>Score</th><th>Grade</th><th>Statut</th><th>Contacté</th><th>Dernier engagement</th></tr></thead>
-        <tbody>
-          {% for m in members %}
-            <tr>
-              <td><a href="{% url 'prospect_detail' m.prospect.pk %}">{{ m.prospect.name }}</a></td>
-              <td>{{ m.acquisition_score_snapshot }}/100</td>
-              <td><span class="badge text-bg-dark">{{ m.grade }}</span></td>
-              <td><span class="badge text-bg-secondary">{{ m.get_status_display }}</span></td>
-              <td>{{ m.contacted_at|date:"d/m/Y H:i"|default:"—" }}</td>
-              <td>{{ m.last_engagement_at|date:"d/m/Y H:i"|default:"—" }}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+  <div class="cockpit-card">
+    <h2 class="h5 mb-3">Prospects ({{ members|length }})</h2>
+    {% if members %}
+      <div class="table-responsive">
+        <table class="table commercial-table align-middle mb-0">
+          <thead><tr><th>Entreprise</th><th>Score</th><th>Grade</th><th>Statut</th><th>Contacté</th><th>Dernier engagement</th><th>MRR</th></tr></thead>
+          <tbody>
+            {% for m in members %}
+              <tr>
+                <td><a href="{% url 'prospect_detail' m.prospect.pk %}">{{ m.prospect.name }}</a></td>
+                <td>{{ m.acquisition_score_snapshot }}/100</td>
+                <td><span class="grade-badge grade-{{ m.grade }}">{{ m.grade }}</span></td>
+                <td><span class="status-pill {% if m.status == 'paying' %}status-success{% elif m.status == 'do_not_contact' or m.status == 'lost' or m.status == 'excluded' %}status-danger{% else %}status-muted{% endif %}">{{ m.get_status_display }}</span></td>
+                <td>{{ m.contacted_at|date:"d/m/Y H:i"|default:"—" }}</td>
+                <td>{{ m.last_engagement_at|date:"d/m/Y H:i"|default:"—" }}</td>
+                <td>{% if m.mrr %}{{ m.mrr }} €{% else %}—{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state"><p>Aucun prospect dans cette campagne pour le moment.</p></div>
+    {% endif %}
   </div>
 </section>
 {% endblock %}

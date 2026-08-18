@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Acquisition Intelligence | ProspectPilot Pro{% endblock %}
 {% block content %}
-<section class="page-intro">
+<section class="section-header">
   <div>
     <span class="eyebrow">ACQUISITION INTELLIGENCE</span>
     <h1>Qui mérite notre attention aujourd'hui ?</h1>
-    <p>Cockpit de business development pour PredictNeed IA.</p>
+    <p>Cockpit de business development pour PredictNeed IA — prospection, engagement et revenu attribué, à partir de données réelles.</p>
   </div>
   <div class="action-row">
     <a class="btn btn-primary-custom" href="{% url 'acquisition_search' %}">Lancer une recherche</a>
@@ -14,48 +14,101 @@
 </section>
 
 <section class="container-fluid px-lg-4 pb-5">
-  <div class="row g-3 mb-4">
-    <div class="col-6 col-md-3"><div class="panel text-center"><div class="fs-3 fw-bold text-success">{{ count_a }}</div><div>Prospects A</div></div></div>
-    <div class="col-6 col-md-3"><div class="panel text-center"><div class="fs-3 fw-bold text-primary">{{ count_b }}</div><div>Prospects B</div></div></div>
-    <div class="col-6 col-md-3"><div class="panel text-center"><div class="fs-3 fw-bold">{{ count_ready }}</div><div>Prêts à contacter</div></div></div>
-    <div class="col-6 col-md-3"><div class="panel text-center"><div class="fs-3 fw-bold">{{ active_campaigns }}</div><div>Campagnes actives</div></div></div>
-    <div class="col-6 col-md-2"><div class="panel text-center"><div class="fs-4 fw-bold">{{ emails_sent }}</div><div>E-mails envoyés</div></div></div>
-    <div class="col-6 col-md-2"><div class="panel text-center"><div class="fs-4 fw-bold">{{ clicks }}</div><div>Clics</div></div></div>
-    <div class="col-6 col-md-2"><div class="panel text-center"><div class="fs-4 fw-bold">{{ signups }}</div><div>Inscriptions</div></div></div>
-    <div class="col-6 col-md-2"><div class="panel text-center"><div class="fs-4 fw-bold">{{ activations }}</div><div>Activations</div></div></div>
-    <div class="col-6 col-md-2"><div class="panel text-center"><div class="fs-4 fw-bold">{{ subscriptions }}</div><div>Abonnements</div></div></div>
-    <div class="col-6 col-md-2"><div class="panel text-center"><div class="fs-4 fw-bold">{{ mrr_total }} €</div><div>MRR attribué</div></div></div>
+  <div class="kpi-row mb-3">
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ count_a }}</span><span class="kpi-label">Prospects A</span></div>
+    <div class="kpi-card kpi-emphasis"><span class="kpi-value">{{ count_b }}</span><span class="kpi-label">Prospects B</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ count_ready }}</span><span class="kpi-label">Prêts à contacter</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ active_campaigns }}</span><span class="kpi-label">Campagnes actives</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ count_blocked }}</span><span class="kpi-label">Exclus / bloqués</span></div>
   </div>
 
-  <div class="panel">
-    <h2>Prospects prioritaires</h2>
-    <div class="table-responsive">
-      <table class="table align-middle">
-        <thead>
-          <tr>
-            <th>Entreprise</th><th>Secteur</th><th>ICP</th><th>Score</th><th>Grade</th><th>Email</th>
-            <th>Signaux</th><th>Dernière action</th><th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for p in priority_prospects %}
-            <tr>
-              <td><strong>{{ p.name }}</strong></td>
-              <td>{{ p.sector|default:"—" }}</td>
-              <td>{{ p.predictneed_icp|default:"—" }}</td>
-              <td>{{ p.predictneed_acquisition_score }}/100</td>
-              <td><span class="badge {% if p.predictneed_grade == 'A' %}text-bg-success{% else %}text-bg-primary{% endif %}">{{ p.predictneed_grade }}</span></td>
-              <td>{{ p.public_email|default:"—" }}</td>
-              <td>{{ p.predictneed_score_reasons|length }} raison(s)</td>
-              <td>{{ p.predictneed_stage|default:"—" }}</td>
-              <td><a class="btn btn-sm btn-outline-dark" href="{% url 'prospect_detail' p.pk %}">Voir</a></td>
-            </tr>
-          {% empty %}
-            <tr><td colspan="9">Aucun prospect qualifié pour le moment. Lance une recherche d'acquisition.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <div class="kpi-row mb-4">
+    <div class="kpi-card"><span class="kpi-value">{{ emails_sent }}</span><span class="kpi-label">E-mails envoyés</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ clicks }}</span><span class="kpi-label">Clics</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ signups }}</span><span class="kpi-label">Inscriptions PredictNeed</span></div>
+    <div class="kpi-card"><span class="kpi-value">{{ activations }}</span><span class="kpi-label">Activations</span></div>
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ subscriptions }}</span><span class="kpi-label">Abonnements</span></div>
+    <div class="kpi-card kpi-positive"><span class="kpi-value">{{ mrr_total }} €</span><span class="kpi-label">MRR attribué</span></div>
+  </div>
+
+  <div class="cockpit-card mb-4">
+    <h2 class="h5 mb-3">Funnel commercial</h2>
+    {% if funnel|length %}
+      <div class="funnel">
+        {% for step in funnel %}
+          <div class="funnel-step"><strong>{{ step.count }}</strong><span>{{ step.label }}</span></div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state"><p>Aucun prospect n'a encore de stade PredictNeed. Lance une recherche Acquisition PredictNeed pour démarrer le funnel.</p></div>
+    {% endif %}
+  </div>
+
+  <div class="cockpit-card mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 class="h5 mb-0">Campagnes actives</h2>
+      <a class="btn btn-sm btn-outline-dark" href="{% url 'campaign_list' %}">Voir toutes les campagnes</a>
     </div>
+    {% if active_campaigns_list %}
+      <div class="table-responsive">
+        <table class="table commercial-table align-middle mb-0">
+          <thead><tr><th>Campagne</th><th>Envoyés</th><th>Clics</th><th>Inscriptions</th><th>Clients</th><th>MRR</th></tr></thead>
+          <tbody>
+            {% for c in active_campaigns_list %}
+              <tr>
+                <td><a href="{% url 'campaign_detail' c.pk %}">{{ c.name }}</a></td>
+                <td>{{ c.metrics.sent }}</td>
+                <td>{{ c.metrics.clicks }}</td>
+                <td>{{ c.metrics.signups }}</td>
+                <td>{{ c.metrics.clients }}</td>
+                <td>{{ c.metrics.mrr }} €</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state"><p>Aucune campagne active. Crée une campagne à partir de tes prospects qualifiés.</p></div>
+    {% endif %}
+  </div>
+
+  <div class="cockpit-card">
+    <h2 class="h5 mb-3">Prospects prioritaires</h2>
+    {% if priority_prospects %}
+      <div class="table-responsive">
+        <table class="table commercial-table align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Entreprise</th><th>Secteur</th><th>ICP</th><th>Score</th><th>Grade</th><th>Email</th>
+              <th>Technologies</th><th>Concurrent</th><th>Angle recommandé</th><th>Prochaine action</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in priority_prospects %}
+              <tr>
+                <td><strong>{{ p.name }}</strong></td>
+                <td>{{ p.sector|default:"—" }}</td>
+                <td>{{ p.predictneed_icp|default:"—" }}</td>
+                <td>{{ p.predictneed_acquisition_score }}/100</td>
+                <td><span class="grade-badge grade-{{ p.predictneed_grade }}">{{ p.predictneed_grade }}</span></td>
+                <td>{{ p.public_email|default:"—" }}</td>
+                <td>{% for t in p.top_technologies %}<span class="tech-chip">{{ t }}</span>{% empty %}—{% endfor %}</td>
+                <td>{% if p.top_competitor %}<span class="status-pill status-warning">{{ p.top_competitor }}</span>{% else %}—{% endif %}</td>
+                <td class="text-truncate" style="max-width:220px;" title="{{ p.recommended_angle }}">{{ p.recommended_angle|default:"—"|truncatechars:60 }}</td>
+                <td>{{ p.next_best_action|default:"—" }}</td>
+                <td><a class="btn btn-sm btn-outline-dark" href="{% url 'prospect_detail' p.pk %}">Voir</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <div class="empty-state-title">Aucun prospect prioritaire.</div>
+        <p>Lancez une recherche Acquisition PredictNeed pour identifier de nouvelles entreprises.</p>
+        <a class="btn btn-primary-custom mt-3" href="{% url 'acquisition_search' %}">Lancer une recherche</a>
+      </div>
+    {% endif %}
   </div>
 </section>
 {% endblock %}

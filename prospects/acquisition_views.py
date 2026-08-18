@@ -5,7 +5,7 @@ Séparé de views.py (déjà volumineux) pour ne pas fragiliser les vues histori
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -27,6 +27,8 @@ from .models import (
     RevenueAttribution,
 )
 from .services.campaign_sending import get_or_create_default_sequence, send_campaign_batch
+from .services.campaign_metrics import annotate_campaigns_with_metrics, campaign_performance_summary
+from .services.commercial_timeline import build_prospect_timeline
 from .services.predictneed_email import render_predictneed_email, send_predictneed_campaign_email
 from .services.provenance import get_email_provenance
 from .services.suppression import is_suppressed
@@ -125,12 +127,25 @@ def acquisition_search_run_detail(request, pk):
 # ETAPE 22 — Acquisition Intelligence
 # ---------------------------------------------------------------------------
 
+FUNNEL_STAGES = [
+    ("identified", "Identifiés"),
+    ("enriched", "Enrichis"),
+    ("qualified", "Qualifiés"),
+    ("ready_to_contact", "Prêts"),
+    ("contacted", "Contactés"),
+    ("engaged", "Engagés"),
+    ("signed_up", "Inscrits"),
+    ("paying", "Clients"),
+]
+
+
 @login_required
 def acquisition_intelligence(request):
     prospects_a = Prospect.objects.filter(predictneed_grade="A", predictneed_excluded=False)
     prospects_b = Prospect.objects.filter(predictneed_grade="B", predictneed_excluded=False)
     ready_to_contact = Prospect.objects.filter(predictneed_stage="ready_to_contact")
     active_campaigns = Campaign.objects.filter(status="active")
+    blocked_prospects = Prospect.objects.filter(predictneed_excluded=True)
 
     emails_sent = EmailSend.objects.filter(status="sent", is_test=False).count()
     clicks = EngagementEvent.objects.filter(event_type="link_clicked").count()
@@ -139,17 +154,39 @@ def acquisition_intelligence(request):
     subscriptions = ConversionEvent.objects.filter(event_type="paying").count()
     mrr_total = RevenueAttribution.objects.aggregate(total=Sum("mrr"))["total"] or 0
 
+    # ETAPE 15 — funnel réel (stades réellement observés sur predictneed_stage,
+    # jamais un pourcentage fictif).
+    stage_counts = dict(
+        Prospect.objects.exclude(predictneed_stage="")
+        .values_list("predictneed_stage")
+        .annotate(n=Count("id"))
+    )
+    funnel = [{"key": key, "label": label, "count": stage_counts.get(key, 0)} for key, label in FUNNEL_STAGES]
+
     priority_prospects = (
         Prospect.objects.filter(predictneed_grade__in=["A", "B"], predictneed_excluded=False)
         .select_related("predictneed_icp")
+        .prefetch_related("technologies", "competitor_detections__competitor", "agent_briefs")
         .order_by("-predictneed_acquisition_score")[:100]
+    )
+    for prospect in priority_prospects:
+        prospect.top_technologies = list({t.technology for t in prospect.technologies.all() if t.is_active})[:4]
+        prospect.top_competitor = next((d.competitor.name for d in prospect.competitor_detections.all()), "")
+        latest_brief = max(prospect.agent_briefs.all(), key=lambda b: b.generated_at, default=None)
+        prospect.recommended_angle = latest_brief.recommended_angle if latest_brief else ""
+        prospect.next_best_action = latest_brief.next_best_action if latest_brief else ""
+
+    active_campaigns_with_metrics = annotate_campaigns_with_metrics(
+        Campaign.objects.filter(status="active").select_related("product", "icp")
     )
 
     context = {
         "count_a": prospects_a.count(),
         "count_b": prospects_b.count(),
         "count_ready": ready_to_contact.count(),
+        "count_blocked": blocked_prospects.count(),
         "active_campaigns": active_campaigns.count(),
+        "active_campaigns_list": active_campaigns_with_metrics,
         "emails_sent": emails_sent,
         "clicks": clicks,
         "signups": signups,
@@ -157,6 +194,7 @@ def acquisition_intelligence(request):
         "subscriptions": subscriptions,
         "mrr_total": mrr_total,
         "priority_prospects": priority_prospects,
+        "funnel": funnel,
     }
     return render(request, "prospects/acquisition_intelligence.html", context)
 
@@ -167,7 +205,9 @@ def acquisition_intelligence(request):
 
 @login_required
 def campaign_list(request):
-    campaigns = Campaign.objects.select_related("product", "icp").order_by("-created_at")
+    campaigns = annotate_campaigns_with_metrics(
+        Campaign.objects.select_related("product", "icp").order_by("-created_at")
+    )
     return render(request, "prospects/campaign_list.html", {"campaigns": campaigns})
 
 
@@ -222,14 +262,24 @@ def campaign_create(request):
 @login_required
 def campaign_detail(request, pk):
     campaign = get_object_or_404(Campaign.objects.select_related("product", "icp", "sequence"), pk=pk)
-    members = campaign.campaign_prospects.select_related("prospect").order_by("-acquisition_score_snapshot")
-    return render(request, "prospects/campaign_detail.html", {"campaign": campaign, "members": members})
+    members = list(campaign.campaign_prospects.select_related("prospect").order_by("-acquisition_score_snapshot"))
+    mrr_by_prospect = dict(
+        RevenueAttribution.objects.filter(campaign=campaign).values_list("prospect_id", "mrr")
+    )
+    for member in members:
+        member.mrr = mrr_by_prospect.get(member.prospect_id)
+    performance = campaign_performance_summary(campaign)
+    return render(request, "prospects/campaign_detail.html", {
+        "campaign": campaign, "members": members, "performance": performance,
+    })
 
 
 @login_required
 def campaign_preview(request, pk):
     campaign = get_object_or_404(Campaign, pk=pk)
-    member = campaign.campaign_prospects.select_related("prospect").order_by("-acquisition_score_snapshot").first()
+    members = campaign.campaign_prospects.select_related("prospect").order_by("-acquisition_score_snapshot")
+    cp_id = request.GET.get("cp")
+    member = members.filter(pk=cp_id).first() if cp_id else members.first()
     if not member:
         messages.error(request, "Aucun prospect dans cette campagne.")
         return redirect("campaign_detail", pk=pk)
@@ -245,10 +295,12 @@ def campaign_preview(request, pk):
     email = member.prospect.public_email or ""
     provenance = get_email_provenance(member.prospect, email) if email else None
     blocked = is_suppressed(email, prospect=member.prospect)
+    destination_url = resolve_target_url(member, variant.cta_type)
 
     return render(request, "prospects/campaign_preview.html", {
-        "campaign": campaign, "member": member, "subject": subject, "html": html, "text": text,
+        "campaign": campaign, "member": member, "members": members, "subject": subject, "html": html, "text": text,
         "provenance": provenance, "blocked": blocked, "compliance_profile": getattr(campaign.product, "compliance_profile", None),
+        "destination_url": destination_url,
     })
 
 
@@ -303,6 +355,56 @@ def campaign_send_test(request, pk):
 # ---------------------------------------------------------------------------
 # ETAPE 34 — réglages Email PredictNeed IA (jamais les secrets SMTP)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# ETAPE 29 (mission 4) — Conversions & Revenus
+# ---------------------------------------------------------------------------
+
+@login_required
+def conversions_revenue(request):
+    conversions = (
+        ConversionEvent.objects.select_related("prospect", "campaign")
+        .order_by("-occurred_at")[:50]
+    )
+    revenue_events = (
+        RevenueAttribution.objects.select_related("prospect", "campaign", "icp")
+        .order_by("-attributed_at")[:50]
+    )
+
+    mrr_total = RevenueAttribution.objects.aggregate(total=Sum("mrr"))["total"] or 0
+    clients_total = ConversionEvent.objects.filter(event_type="paying").count()
+
+    by_icp = list(
+        RevenueAttribution.objects.exclude(icp__isnull=True)
+        .values("icp__name")
+        .annotate(clients=Count("id", distinct=True), mrr=Sum("mrr"))
+        .order_by("-mrr")
+    )
+    by_campaign = annotate_campaigns_with_metrics(
+        Campaign.objects.filter(campaign_prospects__isnull=False).distinct().select_related("product", "icp")
+    )
+    by_grade = list(
+        CampaignProspect.objects.exclude(grade="")
+        .values("grade")
+        .annotate(
+            total=Count("id", distinct=True),
+            contacted=Count("id", filter=Q(contacted_at__isnull=False), distinct=True),
+            clients=Count("id", filter=Q(status="paying"), distinct=True),
+        )
+        .order_by("grade")
+    )
+
+    context = {
+        "conversions": conversions,
+        "revenue_events": revenue_events,
+        "mrr_total": mrr_total,
+        "clients_total": clients_total,
+        "by_icp": by_icp,
+        "by_campaign": [c for c in by_campaign if c.metrics["clients"] or c.metrics["mrr"] or c.metrics["sent"]],
+        "by_grade": by_grade,
+    }
+    return render(request, "prospects/conversions_revenue.html", context)
+
 
 @login_required
 def email_settings(request):

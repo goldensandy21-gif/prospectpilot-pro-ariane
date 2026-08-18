@@ -17,15 +17,16 @@
 <ul class="navbar-nav app-menu-links">
 <li><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
 <li><a class="nav-link" href="{% url 'acquisition_intelligence' %}"><strong>Acquisition Intelligence</strong></a></li>
-<li><a class="nav-link" href="{% url 'prospect_list' %}">Prospects</a></li>
-<li><a class="nav-link" href="{% url 'prospect_import' %}">Import</a></li>
-<li><a class="nav-link" href="{% url 'company_search' %}">Recherche réelle</a></li>
 <li><a class="nav-link" href="{% url 'acquisition_search' %}">Acquisition PredictNeed IA</a></li>
+<li><a class="nav-link" href="{% url 'company_search' %}">Recherche manuelle</a></li>
+<li><a class="nav-link" href="{% url 'prospect_list' %}">Prospects</a></li>
 <li><a class="nav-link" href="{% url 'campaign_list' %}">Campagnes</a></li>
+<li><a class="nav-link" href="{% url 'conversions_revenue' %}">Conversions &amp; Revenus</a></li>
+<li><a class="nav-link" href="{% url 'prospect_import' %}">Import</a></li>
 <li><a class="nav-link" href="{% url 'response_board' %}">Réponses</a></li>
 <li><a class="nav-link" href="{% url 'suppression_list' %}">Oppositions</a></li>
 <li><a class="nav-link" href="{% url 'search_console_home' %}">Search Console</a></li>
-<li><a class="nav-link" href="{% url 'email_settings' %}">Email PredictNeed IA</a></li>
+<li><a class="nav-link" href="{% url 'email_settings' %}">Réglages e-mail</a></li>
 </ul><div class="app-menu-actions"><button class="btn btn-outline-dark" type="button" data-history-back><i class="bi bi-arrow-left"></i> Retour</button><a class="btn btn-primary-custom" href="{% url 'prospect_create' %}">Ajouter</a><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="btn btn-dark">Quitter</button></form></div>
 </div></div></div></nav></header>
 {% endif %}

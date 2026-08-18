@@ -7,10 +7,14 @@
   <div>
     <span class="eyebrow">{{ prospect.get_status_display }}</span>
     <h1>{{ prospect.name }}</h1>
-    <p>{{ prospect.sector }} · {{ prospect.naf_code }} · {{ prospect.city }}</p>
+    <p>{{ prospect.sector }} · {{ prospect.naf_code }} · {{ prospect.city }}{% if prospect.employee_band %} · {{ prospect.employee_band }} salariés{% endif %}</p>
     <div class="action-row">
       <a class="btn btn-outline-dark" href="{% url 'prospect_edit' prospect.pk %}">Modifier</a>
-      <a class="btn btn-primary-custom" href="{% url 'email_preview' prospect.pk %}">Préparer un e-mail</a>
+      {% if predictneed_campaign_membership %}
+        <a class="btn btn-primary-custom" href="{% url 'campaign_preview' predictneed_campaign_membership.campaign_id %}?cp={{ predictneed_campaign_membership.pk }}">Préparer l'e-mail PredictNeed IA</a>
+      {% elif prospect.outbound_eligible and not prospect.predictneed_excluded %}
+        <a class="btn btn-primary-custom" href="{% url 'campaign_create' %}?icp={{ prospect.predictneed_icp_id|default:'' }}">Ajouter à une campagne PredictNeed</a>
+      {% endif %}
       {% if prospect.website %}
         <a class="btn btn-outline-dark" href="{{ prospect.website }}" target="_blank">Voir le site</a>
       {% endif %}
@@ -28,40 +32,58 @@
       </form>
     </div>
   </div>
-  <div class="priority-dial">
-    <span>PRIORITÉ</span>
-    <strong>{{ prospect.priority_score }}</strong>
-    <small>/100</small>
-  </div>
+  {% if prospect.predictneed_acquisition_score or prospect.predictneed_grade %}
+    <div class="priority-dial">
+      <span>SCORE PREDICTNEED</span>
+      <strong>{{ prospect.predictneed_acquisition_score }}</strong>
+      <small>/100 · Grade {{ prospect.predictneed_grade|default:"—" }}</small>
+    </div>
+  {% else %}
+    <div class="priority-dial">
+      <span>PRIORITÉ (SCORE TECHNIQUE)</span>
+      <strong>{{ prospect.priority_score }}</strong>
+      <small>/100</small>
+    </div>
+  {% endif %}
 </section>
 
 <section class="container-fluid px-lg-4 pt-4">
-  <div class="panel">
+  <div class="cockpit-card">
     <h2>Pourquoi prospecter cette entreprise ? (PredictNeed IA)</h2>
-    <div class="row g-3 mb-3">
-      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-4 fw-bold">{{ prospect.predictneed_acquisition_score }}</div><div>Score total</div></div></div>
-      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.icp_fit_score }}</div><div>ICP fit</div></div></div>
-      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.need_score }}</div><div>Besoin</div></div></div>
-      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.acquisition_maturity_score }}</div><div>Maturité</div></div></div>
-      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.contactability_score }}</div><div>Contactabilité</div></div></div>
-      <div class="col-6 col-md-2"><div class="text-center"><div class="fs-5">{{ prospect.timing_score }}</div><div>Timing</div></div></div>
+    {% if not prospect.predictneed_acquisition_score and not prospect.predictneed_grade %}
+      <div class="empty-state mt-3">
+        <p>Ce prospect n'a pas encore de score PredictNeed IA. Lancez une recherche Acquisition PredictNeed ou un enrichissement pour le calculer.</p>
+      </div>
+    {% else %}
+    <div class="score-panel my-3">
+      <div class="score-total">
+        <strong>{{ prospect.predictneed_acquisition_score }}</strong><span>/100</span>
+        <span class="grade-badge grade-{{ prospect.predictneed_grade }} ms-2">{{ prospect.predictneed_grade|default:"—" }}</span>
+      </div>
+      <div class="score-bars">
+        <div class="score-bar-row"><span class="score-bar-label">ICP fit</span><div class="score-bar-track"><div class="score-bar-fill" style="width:{% widthratio prospect.icp_fit_score 30 100 %}%"></div></div><span class="score-bar-value">{{ prospect.icp_fit_score }}/30</span></div>
+        <div class="score-bar-row"><span class="score-bar-label">Besoin</span><div class="score-bar-track"><div class="score-bar-fill" style="width:{% widthratio prospect.need_score 25 100 %}%"></div></div><span class="score-bar-value">{{ prospect.need_score }}/25</span></div>
+        <div class="score-bar-row"><span class="score-bar-label">Maturité</span><div class="score-bar-track"><div class="score-bar-fill" style="width:{% widthratio prospect.acquisition_maturity_score 20 100 %}%"></div></div><span class="score-bar-value">{{ prospect.acquisition_maturity_score }}/20</span></div>
+        <div class="score-bar-row"><span class="score-bar-label">Contactabilité</span><div class="score-bar-track"><div class="score-bar-fill" style="width:{% widthratio prospect.contactability_score 15 100 %}%"></div></div><span class="score-bar-value">{{ prospect.contactability_score }}/15</span></div>
+        <div class="score-bar-row"><span class="score-bar-label">Timing</span><div class="score-bar-track"><div class="score-bar-fill" style="width:{% widthratio prospect.timing_score 10 100 %}%"></div></div><span class="score-bar-value">{{ prospect.timing_score }}/10</span></div>
+      </div>
     </div>
     <p>
-      Grade : <span class="badge text-bg-dark">{{ prospect.predictneed_grade|default:"—" }}</span>
-      · ICP : {{ prospect.predictneed_icp|default:"—" }}
+      ICP : {{ prospect.predictneed_icp|default:"—" }}
       · Éligible outbound :
-      {% if prospect.outbound_eligible %}<span class="badge text-bg-success">Oui</span>
-      {% else %}<span class="badge text-bg-secondary">Non — {{ prospect.outbound_ineligible_reason }}</span>{% endif %}
-      {% if prospect.predictneed_excluded %}· <span class="badge text-bg-danger">Exclu : {{ prospect.predictneed_exclusion_reason }}</span>{% endif %}
+      {% if prospect.outbound_eligible %}<span class="status-pill status-success">Oui</span>
+      {% else %}<span class="status-pill status-danger">Non — {{ prospect.outbound_ineligible_reason }}</span>{% endif %}
+      {% if prospect.predictneed_excluded %}· <span class="status-pill status-danger">Exclu : {{ prospect.predictneed_exclusion_reason }}</span>{% endif %}
     </p>
 
     {% if prospect.predictneed_score_reasons %}
-      <details open><summary>Raisons du score</summary>
+      <details open class="mt-2"><summary>Raisons du score</summary>
         <ul>{% for r in prospect.predictneed_score_reasons %}<li>{{ r }}</li>{% endfor %}</ul>
       </details>
     {% endif %}
+    {% endif %}
 
-    <div class="row mt-3">
+    <div class="row mt-4">
       <div class="col-md-6">
         <h3 class="h6">Signaux détectés</h3>
         <ul>
@@ -70,9 +92,9 @@
           {% empty %}<li>Aucun signal détecté.</li>{% endfor %}
         </ul>
         <h3 class="h6">Technologies</h3>
-        <p>{% for t in predictneed_technologies %}<span class="badge text-bg-light border me-1">{{ t.technology }}</span>{% empty %}Aucune technologie détectée.{% endfor %}</p>
+        <p>{% for t in predictneed_technologies %}<span class="tech-chip">{{ t.technology }}</span>{% empty %}Aucune technologie détectée.{% endfor %}</p>
         <h3 class="h6">Concurrents détectés</h3>
-        <ul>{% for d in predictneed_competitors %}<li>{{ d.competitor.name }} — {{ d.competitor.suggested_angle }}</li>{% empty %}<li>Aucun.</li>{% endfor %}</ul>
+        <ul>{% for d in predictneed_competitors %}<li>{{ d.competitor.name }} — {{ d.competitor.suggested_angle }}</li>{% empty %}<li>Aucun concurrent détecté.</li>{% endfor %}</ul>
       </div>
       <div class="col-md-6">
         {% with brief=predictneed_agent_brief %}
@@ -91,19 +113,33 @@
         {% endif %}
         {% endwith %}
         <h3 class="h6">Campagnes</h3>
-        <ul>{% for m in predictneed_campaigns %}<li>{{ m.campaign.name }} — {{ m.get_status_display }}</li>{% empty %}<li>Aucune campagne.</li>{% endfor %}</ul>
+        <ul>{% for m in predictneed_campaigns %}<li><a href="{% url 'campaign_detail' m.campaign_id %}">{{ m.campaign.name }}</a> — {{ m.get_status_display }}</li>{% empty %}<li>Aucune campagne.</li>{% endfor %}</ul>
         <h3 class="h6">Conversion &amp; revenu attribué</h3>
         <ul>
           {% for c in predictneed_conversions %}<li>{{ c.get_event_type_display }} — {{ c.occurred_at|date:"d/m/Y" }}</li>{% endfor %}
           {% for r in predictneed_revenue %}<li>MRR attribué : {{ r.mrr }} {{ r.currency }}</li>{% endfor %}
-          {% if not predictneed_conversions and not predictneed_revenue %}<li>Aucune conversion enregistrée.</li>{% endif %}
+          {% if not predictneed_conversions and not predictneed_revenue %}<li>Les conversions provenant de PredictNeed apparaîtront ici.</li>{% endif %}
         </ul>
       </div>
     </div>
+
+    {% if predictneed_timeline %}
+      <h3 class="h6 mt-4">Historique commercial</h3>
+      <ul class="commercial-timeline mt-3">
+        {% for entry in predictneed_timeline %}
+          <li class="{% if entry.predictneed %}timeline-predictneed{% endif %}">
+            <time>{{ entry.at|date:"d/m/Y H:i" }}</time>
+            <strong>{{ entry.label }}</strong>
+            {% if entry.meta %}<span class="timeline-meta">{{ entry.meta }}</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
   </div>
 </section>
 
 <section class="container-fluid px-lg-4 pb-5">
+  <p class="eyebrow mb-2">Audit technique ProspectPilot (historique, distinct du score PredictNeed ci-dessus)</p>
   <div class="score-grid">
     <article><span>Technique</span><strong>{{ prospect.technical_score }}</strong></article>
     <article><span>Commercial</span><strong>{{ prospect.commercial_score }}</strong></article>
@@ -331,15 +367,16 @@
       <div class="panel email-prospect-panel">
         <div class="panel-head">
           <div>
-            <span class="eyebrow">EMAIL API</span>
-            <h2>Modèle prêt à envoyer</h2>
+            <span class="eyebrow">E-MAIL PROSPECTPILOT (PROSPECTION CLASSIQUE)</span>
+            <h2>Modèle ProspectPilot Pro</h2>
           </div>
           {% if prospect.public_email %}
             <span class="email-recipient">{{ prospect.public_email }}</span>
           {% endif %}
         </div>
+        <p class="legal-note">Ce modèle promeut ProspectPilot Pro lui-même — distinct des campagnes PredictNeed IA (voir « Préparer l'e-mail PredictNeed IA » en haut de page ou l'onglet Campagnes).</p>
         {% if not prospect.public_email %}
-          <div class="task-state">Adresse e-mail manquante. Le modèle est prêt, mais l'envoi est bloqué.</div>
+          <div class="human-alert mt-2">Adresse e-mail manquante. Le modèle est prêt, mais l'envoi est bloqué.</div>
         {% endif %}
         <div class="template-chip-list">
           {% for tpl in email_templates %}

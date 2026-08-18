@@ -145,3 +145,102 @@ body.menu-open{overflow:hidden!important}
   .navbar-brand>span{width:40px!important;height:40px!important}
   .app-back-button span{display:none!important}
 }
+
+/* ==========================================================================
+   Design system — cockpit commercial (mission 4)
+   Tokens + composants réutilisables. N'écrase aucun style existant : classes
+   nouvelles uniquement, appliquées aux pages Acquisition Intelligence,
+   fiche prospect, campagnes et preview email.
+   ========================================================================== */
+:root{
+  --color-primary:var(--blue);
+  --color-success:var(--green);
+  --color-warning:#b8860b;
+  --color-danger:#c1432e;
+  --color-text:var(--ink);
+  --color-muted:var(--muted);
+  --color-border:var(--line);
+  --surface:var(--paper);
+  --background:var(--bg);
+  --radius-sm:8px;
+  --radius-md:14px;
+  --radius-lg:20px;
+  --shadow-soft:0 10px 30px rgba(21,27,42,.06);
+  --space-1:.4rem;--space-2:.7rem;--space-3:1.1rem;--space-4:1.6rem;--space-5:2.4rem;
+}
+
+/* Section headers — bandeau compact remplaçant le hero géant sur les pages
+   denses en données (cockpit), sans toucher aux pages d'accueil de section. */
+.section-header{padding:2.2rem 4vw 1.4rem;display:flex;justify-content:space-between;align-items:flex-end;gap:1.5rem;flex-wrap:wrap}
+.section-header h1{font-size:clamp(1.9rem,3vw,2.6rem);line-height:1.08;margin:.3rem 0 0}
+.section-header p{color:var(--color-muted);max-width:640px;margin:.5rem 0 0}
+
+.cockpit-card{background:var(--surface);border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-soft);padding:var(--space-4)}
+
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--space-3)}
+.kpi-card{background:var(--surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);box-shadow:var(--shadow-soft)}
+.kpi-card .kpi-value{display:block;font-family:"Manrope";font-size:2rem;font-weight:800;line-height:1.1;color:var(--color-text)}
+.kpi-card .kpi-label{display:block;margin-top:.3rem;font-size:.76rem;color:var(--color-muted)}
+.kpi-card.kpi-emphasis{border-color:color-mix(in srgb, var(--color-primary) 35%, var(--color-border))}
+.kpi-card.kpi-emphasis .kpi-value{color:var(--color-primary)}
+.kpi-card.kpi-positive .kpi-value{color:var(--color-success)}
+
+/* Badges de grade / statut */
+.grade-badge{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border-radius:var(--radius-sm);font-family:"Manrope";font-weight:800;font-size:.9rem;color:#fff;background:var(--color-muted)}
+.grade-badge.grade-A{background:var(--color-success)}
+.grade-badge.grade-B{background:var(--color-primary)}
+.grade-badge.grade-C{background:var(--color-warning)}
+.grade-badge.grade-D{background:var(--color-muted)}
+
+.status-pill{display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .7rem;border-radius:999px;font-size:.72rem;font-weight:700;background:#eef1ff;color:var(--color-primary)}
+.status-pill.status-success{background:#e6f5ee;color:var(--color-success)}
+.status-pill.status-warning{background:#fbf1dc;color:var(--color-warning)}
+.status-pill.status-danger{background:#fbe9e5;color:var(--color-danger)}
+.status-pill.status-muted{background:#eef0f3;color:var(--color-muted)}
+
+/* Score / sous-scores */
+.score-panel{display:flex;flex-wrap:wrap;gap:var(--space-4);align-items:center}
+.score-total{display:flex;align-items:baseline;gap:.5rem}
+.score-total strong{font-family:"Manrope";font-size:3rem;line-height:1;color:var(--color-text)}
+.score-total span{color:var(--color-muted);font-size:.9rem}
+.score-bars{display:grid;gap:.55rem;flex:1;min-width:240px}
+.score-bar-row{display:grid;grid-template-columns:120px 1fr 48px;align-items:center;gap:.6rem;font-size:.78rem}
+.score-bar-row .score-bar-label{color:var(--color-muted)}
+.score-bar-track{height:8px;border-radius:999px;background:#eceff5;overflow:hidden}
+.score-bar-fill{height:100%;border-radius:999px;background:var(--color-primary)}
+.score-bar-row .score-bar-value{text-align:right;font-weight:700;color:var(--color-text)}
+
+/* Timeline commerciale */
+.commercial-timeline{list-style:none;margin:0;padding:0;position:relative}
+.commercial-timeline li{position:relative;padding:0 0 var(--space-4) 1.9rem;border-left:2px solid var(--color-border)}
+.commercial-timeline li:last-child{border-color:transparent;padding-bottom:0}
+.commercial-timeline li::before{content:"";position:absolute;left:-7px;top:2px;width:12px;height:12px;border-radius:50%;background:var(--color-primary);border:2px solid var(--surface)}
+.commercial-timeline li.timeline-predictneed::before{background:var(--color-success)}
+.commercial-timeline time{display:block;font-size:.7rem;color:var(--color-muted);font-family:"Space Mono"}
+.commercial-timeline strong{display:block;font-size:.92rem;margin-top:.15rem}
+.commercial-timeline .timeline-meta{color:var(--color-muted);font-size:.78rem}
+
+/* Funnel */
+.funnel{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:.5rem;align-items:end}
+.funnel-step{text-align:center;padding:.9rem .5rem;background:var(--surface);border:1px solid var(--color-border);border-radius:var(--radius-sm)}
+.funnel-step strong{display:block;font-family:"Manrope";font-size:1.5rem}
+.funnel-step span{display:block;font-size:.66rem;color:var(--color-muted);margin-top:.2rem;line-height:1.25}
+
+/* États vides */
+.empty-state{text-align:center;padding:var(--space-5) var(--space-4);border:1px dashed var(--color-border);border-radius:var(--radius-md);background:var(--surface)}
+.empty-state p{margin:0 auto;max-width:440px;color:var(--color-muted)}
+.empty-state .empty-state-title{font-weight:700;color:var(--color-text);margin-bottom:.3rem}
+
+/* Alertes humaines */
+.human-alert{display:flex;gap:.6rem;align-items:flex-start;padding:.9rem 1rem;border-radius:var(--radius-sm);background:#fbf1dc;border:1px solid #ecd8a0;font-size:.85rem;line-height:1.45}
+.human-alert.human-alert-danger{background:#fbe9e5;border-color:#f0bdae}
+
+/* Tables commerciales : plus respirantes, badges alignés */
+.commercial-table th{font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:var(--color-muted);font-weight:700;border-bottom:2px solid var(--color-border)}
+.commercial-table td{vertical-align:middle}
+.tech-chip{display:inline-flex;align-items:center;padding:.3rem .6rem;border-radius:999px;background:#eef1ff;color:var(--color-primary);font-size:.7rem;font-weight:700;margin:0 .3rem .3rem 0}
+
+@media(max-width:767px){
+  .score-bar-row{grid-template-columns:96px 1fr 40px}
+  .section-header{padding:1.6rem 5vw 1rem}
+}

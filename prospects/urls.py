@@ -56,6 +56,9 @@ urlpatterns = [
     # ETAPE 16 — transparence individuelle
     path("privacy/prospect/<uuid:token>/",acquisition_views.prospect_privacy,name="prospect_privacy"),
 
+    # ETAPE 29 (mission 4) — Conversions & Revenus
+    path("conversions/",acquisition_views.conversions_revenue,name="conversions_revenue"),
+
     # ETAPE 34 — réglages e-mail PredictNeed IA
     path("settings/email/",acquisition_views.email_settings,name="email_settings"),
 

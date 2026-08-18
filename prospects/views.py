@@ -30,6 +30,7 @@ from .services.company_search import (
 from .services.messaging import build_message
 from .services.emailing import render_email, send_prospect_email
 from .services.suppression import suppress
+from .services.commercial_timeline import build_prospect_timeline
 from .services.reports import prospects_csv, prospects_xlsx, prospect_pdf
 from .services.search_console import (
     create_flow, list_properties, fetch_metrics,
@@ -224,8 +225,10 @@ def prospect_detail(request, pk):
             "predictneed_competitors": prospect.competitor_detections.select_related("competitor"),
             "predictneed_agent_brief": prospect.agent_briefs.order_by("-generated_at").first(),
             "predictneed_campaigns": prospect.campaign_memberships.select_related("campaign"),
+            "predictneed_campaign_membership": prospect.campaign_memberships.order_by("-created_at").first(),
             "predictneed_conversions": prospect.conversion_events.all(),
             "predictneed_revenue": prospect.revenue_attributions.all(),
+            "predictneed_timeline": build_prospect_timeline(prospect),
         },
     )
 

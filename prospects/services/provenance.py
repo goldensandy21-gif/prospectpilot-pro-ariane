@@ -11,6 +11,12 @@ SOURCE_TYPE_LABELS = {
     "other": "source publique professionnelle",
 }
 
+EMAIL_TYPE_LABELS = {
+    "personal": "Nominatif",
+    "generic": "Générique",
+    "unknown": "Type inconnu",
+}
+
 
 def get_email_provenance(prospect, email):
     normalized = (email or "").strip().lower()
@@ -27,6 +33,7 @@ def get_email_provenance(prospect, email):
             "publicly_accessible": True,
             "confidence": public_email.confidence_score,
             "verification_status": public_email.verification_status,
+            "email_type": EMAIL_TYPE_LABELS.get(public_email.email_type, "Type inconnu"),
         }
 
     evidence = prospect.evidence_items.filter(field_name="email", normalized_value=normalized).order_by("-confidence_score").first()
@@ -40,6 +47,7 @@ def get_email_provenance(prospect, email):
             "publicly_accessible": True,
             "confidence": evidence.confidence_score,
             "verification_status": evidence.verification_status,
+            "email_type": "Type inconnu",
         }
 
     return {
@@ -51,6 +59,7 @@ def get_email_provenance(prospect, email):
         "publicly_accessible": False,
         "confidence": 0,
         "verification_status": "unverified",
+        "email_type": "Type inconnu",
     }
 
 
