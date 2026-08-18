@@ -5,7 +5,7 @@ primary_region = "cdg"
   dockerfile = "Dockerfile"
 
 [processes]
-  web = "python manage.py migrate --noinput && python manage.py initialize_app && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 180"
+  web = "sh -c 'python manage.py migrate --noinput && python manage.py initialize_app && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 180'"
   worker = "celery -A config worker -l info --concurrency=2"
   beat = "celery -A config beat -l info"
 
