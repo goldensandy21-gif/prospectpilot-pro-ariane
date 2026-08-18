@@ -12,6 +12,15 @@ d'erreur correspond exactement à ce bug — ne touche à aucune autre erreur.
 Une fois qu'un candidat est réparé, son status quitte "error" : relancer la
 commande est donc sans effet sur les candidats déjà réparés (idempotent).
 
+Après réparation :
+- les compteurs de chaque CompanySearchRun concerné (with_site_count,
+  enriched_count, with_email_count, qualified_a/b/c_count,
+  not_eligible_count, error_count) sont recalculés avec exactement les mêmes
+  règles que run_acquisition_pipeline (voir recompute_search_run_counters) ;
+- si TOUS les candidats "isoformat" d'un run ont été réparés, les entrées
+  correspondantes sont retirées de CompanySearchRun.errors — les erreurs
+  réseau ou sans rapport avec ce bug ne sont jamais touchées.
+
 Usage :
     python manage.py repair_creation_date_candidates            # dry-run (par défaut)
     python manage.py repair_creation_date_candidates --apply     # applique réellement
@@ -20,7 +29,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from ...models import Prospect, SearchCandidate
-from ...services.acquisition_pipeline import _finalize_candidate
+from ...services.acquisition_pipeline import _finalize_candidate, recompute_search_run_counters
 
 ERROR_SIGNATURE = "isoformat"
 
@@ -45,8 +54,11 @@ class Command(BaseCommand):
         self.stdout.write(f"{total} candidat(s) en status=error correspondant au bug creation_date.")
 
         repaired, skipped_no_prospect, failed = 0, 0, []
+        affected_runs = {}
 
         for candidate in broken:
+            affected_runs[candidate.search_run_id] = candidate.search_run
+
             if not candidate.prospect_id:
                 skipped_no_prospect += 1
                 continue
@@ -74,10 +86,34 @@ class Command(BaseCommand):
             except Exception as exc:
                 failed.append((candidate.pk, str(exc)[:300]))
 
+        if apply_changes:
+            for search_run in affected_runs.values():
+                recompute_search_run_counters(search_run)
+                self._clean_resolved_errors(search_run)
+
         mode = "APPLIQUÉ" if apply_changes else "DRY-RUN (aucune écriture)"
         self.stdout.write(self.style.SUCCESS(
             f"[{mode}] Réparés : {repaired} | Sans prospect associé (ignorés) : {skipped_no_prospect} | "
-            f"Échecs : {len(failed)}"
+            f"Échecs : {len(failed)} | Recherches recalculées : {len(affected_runs) if apply_changes else 0}"
         ))
         for pk, err in failed:
             self.stdout.write(self.style.ERROR(f"  Candidat {pk} : {err}"))
+
+    def _clean_resolved_errors(self, search_run):
+        """Retire de CompanySearchRun.errors les entrées du bug isoformat
+        uniquement si plus aucun candidat de ce run n'y correspond encore —
+        ne touche jamais les erreurs réseau ou sans rapport."""
+        still_broken = SearchCandidate.objects.filter(
+            search_run=search_run, status="error", error__icontains=ERROR_SIGNATURE,
+        ).exists()
+        if still_broken:
+            return
+
+        original_errors = search_run.errors or []
+        cleaned_errors = [
+            entry for entry in original_errors
+            if ERROR_SIGNATURE not in str(entry.get("message", ""))
+        ]
+        if len(cleaned_errors) != len(original_errors):
+            search_run.errors = cleaned_errors
+            search_run.save(update_fields=["errors"])

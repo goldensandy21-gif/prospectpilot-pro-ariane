@@ -274,7 +274,7 @@ def _finalize_candidate(candidate, quick_data, technologies, prospect, icp, prod
     candidate.final_score = score_result["predictneed_acquisition_score"]
     candidate.grade = score_result["predictneed_grade"]
     candidate.status = "not_eligible" if score_result["predictneed_excluded"] else "converted"
-    candidate.save(update_fields=["contact_email", "outbound_eligible", "outbound_ineligible_reason", "final_score", "grade", "status"])
+    candidate.save(update_fields=["contact_email", "outbound_eligible", "outbound_ineligible_reason", "final_score", "grade", "status", "error"])
 
     if score_result["predictneed_excluded"]:
         prospect.predictneed_stage = "do_not_contact"
@@ -287,6 +287,36 @@ def _finalize_candidate(candidate, quick_data, technologies, prospect, icp, prod
     prospect.save(update_fields=["predictneed_stage", "updated_at"])
 
     return candidate.status
+
+
+def recompute_search_run_counters(search_run, save=True):
+    """Recalcule les compteurs stockés de CompanySearchRun à partir de l'état
+    réel des SearchCandidate — règles identiques à la fin de
+    run_acquisition_pipeline, réutilisées telles quelles par
+    repair_creation_date_candidates pour ne jamais avoir deux formules
+    différentes (mission 5, correctif pré-production).
+    """
+    final = SearchCandidate.objects.filter(search_run=search_run)
+    scanned_not_eligible = final.filter(status="not_eligible").exclude(outbound_ineligible_reason=NO_SITE_REASON)
+
+    search_run.with_site_count = final.exclude(site_url="").count()
+    # "Réellement scannés" : convertis + exclus après analyse réelle — jamais les no_site.
+    search_run.enriched_count = final.filter(status="converted").count() + scanned_not_eligible.count()
+    search_run.with_email_count = final.exclude(contact_email="").count()
+    search_run.qualified_a_count = final.filter(grade="A").count()
+    search_run.qualified_b_count = final.filter(grade="B").count()
+    search_run.qualified_c_count = final.filter(grade="C").count()
+    # Non éligibles après analyse réelle uniquement (exclut les no_site, jamais analysés).
+    search_run.not_eligible_count = scanned_not_eligible.count() + final.filter(status="rejected_prescore").count()
+    search_run.error_count = final.filter(status="error").count()
+
+    if save:
+        search_run.save(update_fields=[
+            "with_site_count", "enriched_count", "with_email_count",
+            "qualified_a_count", "qualified_b_count", "qualified_c_count",
+            "not_eligible_count", "error_count",
+        ])
+    return search_run
 
 
 def run_acquisition_pipeline(search_run):
@@ -335,20 +365,7 @@ def run_acquisition_pipeline(search_run):
             search_run.append_error(f"Candidat {candidate.name} ({candidate.siren}) : {exc}")
             continue
 
-    final = SearchCandidate.objects.filter(search_run=search_run)
-    no_site_excluded = final.filter(status="not_eligible", outbound_ineligible_reason=NO_SITE_REASON)
-    scanned_not_eligible = final.filter(status="not_eligible").exclude(outbound_ineligible_reason=NO_SITE_REASON)
-
-    search_run.with_site_count = final.exclude(site_url="").count()
-    # "Réellement scannés" : convertis + exclus après analyse réelle — jamais les no_site.
-    search_run.enriched_count = final.filter(status="converted").count() + scanned_not_eligible.count()
-    search_run.with_email_count = final.exclude(contact_email="").count()
-    search_run.qualified_a_count = final.filter(grade="A").count()
-    search_run.qualified_b_count = final.filter(grade="B").count()
-    search_run.qualified_c_count = final.filter(grade="C").count()
-    # Non éligibles après analyse réelle uniquement (exclut les no_site, jamais analysés).
-    search_run.not_eligible_count = scanned_not_eligible.count() + final.filter(status="rejected_prescore").count()
-    search_run.error_count = final.filter(status="error").count()
+    recompute_search_run_counters(search_run, save=False)
     search_run.status = "done"
     search_run.current_stage = "done"
     search_run.finished_at = timezone.now()
