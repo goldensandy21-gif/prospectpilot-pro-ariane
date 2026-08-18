@@ -138,7 +138,9 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "contact
 EMAIL_SENDER_NAME = os.getenv("EMAIL_SENDER_NAME", "Ariane - ProspectPilot Pro")
 CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", DEFAULT_FROM_EMAIL)
 COMPANY_NAME = os.getenv("COMPANY_NAME", "ProspectPilot Pro")
-COMPANY_POSTAL_ADDRESS = os.getenv("COMPANY_POSTAL_ADDRESS", "Lyon, France")
+# Mission 4.1 : ne jamais fabriquer une adresse légale non confirmée. Reste vide
+# tant que COMPANY_POSTAL_ADDRESS n'est pas explicitement renseigné (Fly secret).
+COMPANY_POSTAL_ADDRESS = os.getenv("COMPANY_POSTAL_ADDRESS", "")
 EMAIL_BATCH_LIMIT = int(os.getenv("EMAIL_BATCH_LIMIT", "20"))
 
 PRODUCT_URL = os.getenv("PRODUCT_URL", PUBLIC_BASE_URL)

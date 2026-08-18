@@ -1,7 +1,13 @@
 """Données initiales idempotentes pour le moteur d'acquisition PredictNeed IA.
 
-Toutes les fonctions utilisent update_or_create/get_or_create : elles peuvent être
-rejouées sans effet de bord ni doublon (ETAPE 28 — initialize_app doit rester sûr).
+Toutes les fonctions utilisent get_or_create (jamais update_or_create) : rejouable
+sans effet de bord ni doublon, ET sans jamais écraser une valeur déjà en base.
+initialize_app tourne à CHAQUE démarrage Fly (voir fly.toml) — si une valeur (URL
+produit, poids ICP, angle concurrent, information juridique...) a été modifiée
+depuis l'admin entre deux déploiements, un redémarrage ne doit jamais la
+remplacer silencieusement par sa valeur par défaut (ETAPE 28/13, mission 4.1).
+Seule la toute première création utilise les defaults ; ensuite la ligne
+existante n'est plus touchée par ce module.
 
 Aucune information juridique n'est inventée ici : les champs de conformité restent
 vides tant qu'ils ne sont pas fournis via variables d'environnement ou saisis en admin.
@@ -18,7 +24,7 @@ from ..models import (
 
 
 def seed_predictneed_product():
-    product, _ = ProductProfile.objects.update_or_create(
+    product, _ = ProductProfile.objects.get_or_create(
         slug="predictneed-ia",
         defaults={
             "name": "PredictNeed IA",
@@ -65,7 +71,7 @@ def seed_predictneed_product():
 
 
 def seed_predictneed_compliance_profile(product):
-    profile, _ = EmailComplianceProfile.objects.update_or_create(
+    profile, _ = EmailComplianceProfile.objects.get_or_create(
         product=product,
         defaults={
             "organization_name": "PredictNeed IA",
@@ -144,7 +150,7 @@ ICP_DEFINITIONS = [
 def seed_icp_profiles(product):
     created = []
     for definition in ICP_DEFINITIONS:
-        icp, _ = ICPProfile.objects.update_or_create(
+        icp, _ = ICPProfile.objects.get_or_create(
             product=product,
             name=definition["name"],
             defaults={
@@ -236,7 +242,7 @@ COMPETITOR_DEFINITIONS = [
 def seed_competitors():
     created = []
     for definition in COMPETITOR_DEFINITIONS:
-        competitor, _ = Competitor.objects.update_or_create(
+        competitor, _ = Competitor.objects.get_or_create(
             name=definition["name"],
             defaults={
                 "category": definition["category"],
@@ -284,7 +290,7 @@ def seed_search_presets(product, icps_by_name):
         icp = icps_by_name.get(definition["icp_name"])
         if not icp:
             continue
-        preset, _ = SearchPreset.objects.update_or_create(
+        preset, _ = SearchPreset.objects.get_or_create(
             name=definition["name"],
             defaults={
                 "product": product,

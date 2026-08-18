@@ -3,7 +3,7 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
-from prospects.models import Competitor, ICPProfile, ProductProfile, SearchPreset
+from prospects.models import Competitor, EmailComplianceProfile, ICPProfile, ProductProfile, SearchPreset
 
 
 class InitializeAppIdempotencyTests(TestCase):
@@ -20,6 +20,50 @@ class InitializeAppIdempotencyTests(TestCase):
         self.assertTrue(SearchPreset.objects.exists())
         for preset in SearchPreset.objects.all():
             self.assertEqual(preset.icp.product, preset.product)
+
+    def test_redeploy_never_overwrites_admin_edited_values(self):
+        """Mission 4.1 — initialize_app tourne à chaque démarrage Fly (fly.toml).
+        Un redéploiement ne doit JAMAIS écraser une configuration déjà modifiée
+        depuis l'admin (URL produit, prix, poids ICP, angle concurrent,
+        information juridique)."""
+        call_command("initialize_app")
+
+        product = ProductProfile.objects.get(slug="predictneed-ia")
+        product.website_url = "https://admin-edited-url.example"
+        product.monthly_price = 149
+        product.save()
+
+        icp = ICPProfile.objects.filter(product=product).first()
+        icp.weights = {"icp_fit": 50, "need": 20, "acquisition_maturity": 15, "contactability": 10, "timing": 5}
+        icp.save()
+
+        competitor = Competitor.objects.first()
+        competitor.suggested_angle = "Angle personnalisé saisi par l'utilisateur."
+        competitor.save()
+
+        compliance = EmailComplianceProfile.objects.get(product=product)
+        compliance.legal_name = "Raison sociale réelle saisie par l'utilisateur"
+        compliance.save()
+
+        preset = SearchPreset.objects.first()
+        preset.volume_max_candidates = 42
+        preset.save()
+
+        # Simule un redéploiement Fly : initialize_app est réexécuté au démarrage.
+        call_command("initialize_app")
+
+        product.refresh_from_db()
+        icp.refresh_from_db()
+        competitor.refresh_from_db()
+        compliance.refresh_from_db()
+        preset.refresh_from_db()
+
+        self.assertEqual(product.website_url, "https://admin-edited-url.example")
+        self.assertEqual(product.monthly_price, 149)
+        self.assertEqual(icp.weights["icp_fit"], 50)
+        self.assertEqual(competitor.suggested_angle, "Angle personnalisé saisi par l'utilisateur.")
+        self.assertEqual(compliance.legal_name, "Raison sociale réelle saisie par l'utilisateur")
+        self.assertEqual(preset.volume_max_candidates, 42)
 
 
 class AcquisitionPagesRequireLoginTests(TestCase):

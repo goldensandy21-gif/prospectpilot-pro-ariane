@@ -149,7 +149,7 @@ def build_email_context(prospect, request=None, template_obj=None):
         "contact_email": _setting("CONTACT_EMAIL", _setting("DEFAULT_FROM_EMAIL", "")),
         "unsubscribe_url": unsubscribe_url,
         "company_name_sender": _setting("COMPANY_NAME", "ProspectPilot Pro"),
-        "postal_address": _setting("COMPANY_POSTAL_ADDRESS", "Lyon, France"),
+        "postal_address": _setting("COMPANY_POSTAL_ADDRESS", ""),
         "preheader": "Une proposition courte pour présenter ProspectPilot Pro.",
     }
     if template_obj and template_obj.preheader:
