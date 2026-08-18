@@ -143,7 +143,7 @@
 </section>
 
 <section class="container-fluid px-lg-4 pb-5">
-  <p class="eyebrow mb-2">Audit technique ProspectPilot (historique, distinct du score PredictNeed ci-dessus)</p>
+  <p class="eyebrow mb-2">Analyse détaillée / Historique (distinct du workflow commercial PredictNeed ci-dessus)</p>
   <div class="score-grid">
     <article><span>Technique</span><strong>{{ prospect.technical_score }}</strong></article>
     <article><span>Commercial</span><strong>{{ prospect.commercial_score }}</strong></article>
@@ -368,32 +368,6 @@
     </div>
 
     <div>
-      <details class="panel email-prospect-panel">
-        <summary style="cursor:pointer;">
-          <span class="eyebrow">OUTIL HISTORIQUE (HORS PARCOURS PRINCIPAL)</span>
-          <h2 style="display:inline;font-size:1.1rem;">Ancien modèle ProspectPilot Pro</h2>
-        </summary>
-        <p class="legal-note mt-2">Ce modèle fait la promotion de ProspectPilot Pro lui-même, pas de PredictNeed IA — conservé uniquement pour compatibilité historique. Pour contacter ce prospect, utilise « Préparer un e-mail PredictNeed » en haut de page.</p>
-        {% if not prospect.public_email %}
-          <div class="human-alert mt-2">Adresse e-mail manquante. Le modèle est prêt, mais l'envoi est bloqué.</div>
-        {% endif %}
-        <div class="template-chip-list">
-          {% for tpl in email_templates %}
-            <span>{{ tpl.name }}</span>
-          {% empty %}
-            <span>Modèle par défaut</span>
-          {% endfor %}
-        </div>
-        <div class="email-subject">
-          <span>Sujet</span>
-          <strong>{{ email_subject }}</strong>
-        </div>
-        <div class="email-mini-frame">
-          {{ email_html|safe }}
-        </div>
-        <a class="btn btn-outline-dark w-100 mt-3" href="{% url 'email_preview' prospect.pk %}">Modifier et envoyer (ancien outil)</a>
-      </details>
-
       <div class="panel mt-4">
         <span class="eyebrow">HISTORIQUE E-MAILS</span>
         <h2>Envois</h2>
@@ -439,6 +413,32 @@
         {% endif %}
         <p class="legal-note">Cette zone sert au suivi après contact. Pour envoyer un e-mail, utilise le modèle au-dessus.</p>
       </div>
+
+      <details class="panel email-prospect-panel mt-4">
+        <summary style="cursor:pointer;">
+          <span class="eyebrow">OUTILS HÉRITÉS</span>
+          <h2 style="display:inline;font-size:1.1rem;">Ancien modèle ProspectPilot Pro</h2>
+        </summary>
+        <p class="legal-note mt-2">Ce modèle fait la promotion de ProspectPilot Pro lui-même, pas de PredictNeed IA — conservé uniquement pour compatibilité historique, en dehors du workflow commercial principal. Pour contacter ce prospect, utilise « Préparer un e-mail PredictNeed » en haut de page.</p>
+        {% if not prospect.public_email %}
+          <div class="human-alert mt-2">Adresse e-mail manquante. Le modèle est prêt, mais l'envoi est bloqué.</div>
+        {% endif %}
+        <div class="template-chip-list">
+          {% for tpl in email_templates %}
+            <span>{{ tpl.name }}</span>
+          {% empty %}
+            <span>Modèle par défaut</span>
+          {% endfor %}
+        </div>
+        <div class="email-subject">
+          <span>Sujet</span>
+          <strong>{{ email_subject }}</strong>
+        </div>
+        <div class="email-mini-frame">
+          {{ email_html|safe }}
+        </div>
+        <a class="btn btn-outline-dark w-100 mt-3" href="{% url 'email_preview' prospect.pk %}">Modifier et envoyer (ancien outil)</a>
+      </details>
     </div>
   </div>
 </section>
