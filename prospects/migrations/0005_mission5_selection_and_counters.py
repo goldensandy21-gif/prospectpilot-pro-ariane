@@ -9,6 +9,15 @@
 #   - source == "acquisition_pipeline_predictneed" (candidats techniques du
 #     pipeline d'acquisition) -> pas encore sélectionnés par un humain, mais
 #     aucune de leurs données n'est touchée ni supprimée.
+#
+# Correctif pré-production (échec réel constaté en production, Postgres 18) :
+# l'index de selected_for_prospecting n'est PLUS créé dans cette migration.
+# AddField + backfill s'exécutent et commitent seuls dans cette transaction ;
+# l'index est créé séparément par 0006, dans sa propre transaction, une fois
+# 0005 terminée — pour éviter tout conflit avec des triggers de contrainte en
+# attente sur prospects_prospect au moment du CREATE INDEX. Le modèle Python
+# (Prospect.selected_for_prospecting) garde db_index=True : seule cette
+# migration ne construit pas encore l'index tout de suite.
 
 from django.db import migrations, models
 
@@ -53,7 +62,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="prospect",
             name="selected_for_prospecting",
-            field=models.BooleanField(db_index=True, default=False),
+            field=models.BooleanField(default=False),
         ),
         migrations.RunPython(backfill_selected_for_prospecting, noop_reverse),
     ]
