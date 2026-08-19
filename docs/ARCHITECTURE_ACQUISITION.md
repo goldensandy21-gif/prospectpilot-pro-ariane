@@ -351,18 +351,34 @@ LINKEDIN_CONNECT) et C (Intent 63 + Engagement 45, priorité maximale). Les
 filtres `intent_min` et `nba` ont été testés en conditions réelles dans le
 navigateur (2 puis 1 prospect affiché(s), comme attendu).
 
+## Parcours métier complet (section 20)
+
+`test_mission6_full_business_journey_e2e.py` : un seul prospect suivi de
+bout en bout — Trouver → enrichir → signaux (SignalCollector) → Fit/Intent
+→ sélection → campagne multicanal → LinkedIn (`MockLinkedInProvider`,
+invitation → acceptation → message) → e-mail (backend de test Django,
+jamais de SMTP réel) → engagement PredictNeed (webhook réel) → conversion
+→ revenu (`RevenueAttribution`) → arrêt automatique de la séquence une fois
+le prospect client payant. Vérifie la cohérence à chaque étape plutôt que
+seulement l'état final.
+
 ## État d'avancement de la Mission 6
 
-Réalisé et testé (288 tests, migrations 0007-0011 vérifiées sur Postgres 18
-réel) : consolidation ProspectSignal (dédoublonnage par empreinte), fraîcheur
-canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next Best Action
-structurée, orchestration LinkedIn (provider manuel/mock), timeline étendue,
-architecture SignalCollector, séquences multicanal Campaign/CampaignProspect,
-garde-fous de personnalisation des messages, alertes, analytics par
-signal/canal/bande d'Intent, interface Prospects/fiche prospect, tests de
-non-régression et de protection des données.
+Réalisé et testé (289 tests, migrations 0007-0011 vérifiées individuellement
+ET en une seule chaîne continue 0006→0011 sur Postgres 18 réel avec 80
+prospects/160 signaux/16 contacts déjà en place — zéro perte de données,
+zéro erreur) : consolidation ProspectSignal (dédoublonnage par empreinte),
+fraîcheur canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next
+Best Action structurée, orchestration LinkedIn (provider manuel/mock),
+timeline étendue, architecture SignalCollector, séquences multicanal
+Campaign/CampaignProspect, garde-fous de personnalisation des messages,
+alertes, analytics par signal/canal/bande d'Intent, interface Prospects/
+fiche prospect (vérifiée en navigateur), parcours métier bout-en-bout
+complet, tests de non-régression et de protection des données.
 
-Restant (non commencé à ce stade) : scénario métier bout-en-bout complet
-couvrant Campagnes/Résultats en plus de Prospects (section 20 — la
-différenciation A/B/C elle-même est déjà couverte et vérifiée, en tests
-automatisés et en navigateur).
+Blocs A à H (dans l'ordre demandé) tous complétés et testés. Reste hors
+scope de cette session : intégration LinkedIn via une véritable API
+autorisée (le provider `manual`/`mock` reste la seule implémentation, par
+design — aucune automatisation réelle n'a jamais été demandée), et
+l'optimisation automatique des pondérations à partir de l'historique réel
+(explicitement reportée par la mission elle-même, section 17).
