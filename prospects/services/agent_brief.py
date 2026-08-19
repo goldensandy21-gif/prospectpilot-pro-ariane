@@ -5,6 +5,8 @@ ProspectTechnology, CompetitorDetection, ContactPerson, PublicEmail) : aucune ph
 n'invente une observation qui ne serait pas rattachée à une preuve en base.
 """
 from ..models import AgentBrief
+from .acquisition_scores import recompute_acquisition_scores
+from .next_best_action import compute_next_best_action
 from .predictneed_scoring import score_prospect
 
 
@@ -37,6 +39,10 @@ def _recommended_angle(prospect, competitor_detections):
 def generate_agent_brief(prospect, icp=None, product=None, campaign=None, persist=True):
     icp = icp or prospect.predictneed_icp
     score_result = score_prospect(prospect, icp=icp, product=product, persist=persist)
+    # Rafraîchit intent_score/engagement_score avant de calculer la NBA :
+    # sans ça, un brief généré juste après une nouvelle détection de signal
+    # utiliserait un intent_score obsolète.
+    recompute_acquisition_scores(prospect, persist=persist)
 
     positive_signals = list(prospect.signals.filter(positive=True).order_by("-score_impact")[:8])
     risk_signals = list(prospect.signals.filter(category="risk")[:5])
@@ -67,14 +73,11 @@ def generate_agent_brief(prospect, icp=None, product=None, campaign=None, persis
         *(d.source_url for d in competitor_detections if d.source_url),
     })
 
-    next_best_action = {
-        "A": "Contacter avec un e-mail personnalisé sous 48h.",
-        "B": "Ajouter à une campagne de qualification à seuil B.",
-        "C": "Poursuivre l'enrichissement avant tout contact.",
-        "D": "Ne pas contacter pour le moment.",
-    }.get(score_result["predictneed_grade"], "Ne pas contacter pour le moment.")
-    if score_result["predictneed_excluded"]:
-        next_best_action = "Ne pas contacter : " + score_result["predictneed_exclusion_reason"]
+    # Mission 6, section 12 : NBA structurée (code + raison + confiance + signal
+    # déclencheur), composée ici en une seule phrase pour le champ existant
+    # AgentBrief.next_best_action — aucun second système de recommandation.
+    nba = compute_next_best_action(prospect)
+    next_best_action = f"{nba['code']} — {nba['reason']}"[:255]
 
     defaults = {
         "product": product,
