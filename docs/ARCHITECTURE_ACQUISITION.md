@@ -321,17 +321,48 @@ même signal_type pour un même prospect. Une future optimisation
 automatique des poids pourra se construire sur ces données réelles — pas
 avant.
 
+## Interface (section 14)
+
+Aucun nouveau menu principal — `base.html` inchangé (Dashboard | Trouver des
+prospects | Prospects | Campagnes | Résultats | Réglages). Tout est intégré
+dans les deux pages existantes :
+
+- **Liste Prospects** (`templates/prospects/list.html`,
+  `views.py::prospect_list`) : colonnes FIT / INTENT / ENGAGEMENT / Priorité
+  / Dernier signal / Âge / Email / LinkedIn / Action recommandée. Filtres
+  ajoutés : Intent minimum, Engagement minimum, signal &lt; 7j/30j, LinkedIn
+  disponible, e-mail disponible, In Market (réutilise les mêmes bandes que
+  `in_market_status.py`), Action recommandée (post-filtre Python, la NBA
+  n'étant pas un champ stocké).
+- **Fiche prospect** (`templates/prospects/detail.html`,
+  `views.py::prospect_detail`) : nouvelle carte "Pourquoi contacter cette
+  entreprise maintenant ?" — FIT/INTENT/ENGAGEMENT/PRIORITÉ, statut IN
+  MARKET (phrase toujours hedgée), raisons INTENT/ENGAGEMENT dépliables,
+  dernier signal avec âge et source, décideur identifié, action recommandée
+  avec sa raison, lien LinkedIn si disponible. La timeline (déjà présente)
+  affiche désormais aussi les signaux/étapes LinkedIn/recalculs de score du
+  bloc précédent.
+
+Vérifié visuellement en navigateur avec 3 prospects fixtures locales
+(A/B/C, mêmes profils que les tests E2E de la section 20, supprimées après
+vérification) : la liste et la fiche différencient clairement A ("Aucun
+signal récent" / NURTURE), B (Intent 63, "Intention probable" /
+LINKEDIN_CONNECT) et C (Intent 63 + Engagement 45, priorité maximale). Les
+filtres `intent_min` et `nba` ont été testés en conditions réelles dans le
+navigateur (2 puis 1 prospect affiché(s), comme attendu).
+
 ## État d'avancement de la Mission 6
 
-Réalisé et testé (278 tests, migrations 0007-0011 vérifiées sur Postgres 18
+Réalisé et testé (288 tests, migrations 0007-0011 vérifiées sur Postgres 18
 réel) : consolidation ProspectSignal (dédoublonnage par empreinte), fraîcheur
 canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next Best Action
 structurée, orchestration LinkedIn (provider manuel/mock), timeline étendue,
 architecture SignalCollector, séquences multicanal Campaign/CampaignProspect,
 garde-fous de personnalisation des messages, alertes, analytics par
-signal/canal/bande d'Intent, tests de non-régression et de protection des
-données.
+signal/canal/bande d'Intent, interface Prospects/fiche prospect, tests de
+non-régression et de protection des données.
 
-Restant (non commencé à ce stade) : mise à jour des templates Prospects/
-fiche prospect (section 14), tests UX en navigateur et scénario métier
-bout-en-bout complet avec vérification visuelle (section 20).
+Restant (non commencé à ce stade) : scénario métier bout-en-bout complet
+couvrant Campagnes/Résultats en plus de Prospects (section 20 — la
+différenciation A/B/C elle-même est déjà couverte et vérifiée, en tests
+automatisés et en navigateur).

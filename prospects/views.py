@@ -83,6 +83,38 @@ def filtered_prospects(request):
         qs = qs.filter(department=department)
     if naf:
         qs = qs.filter(naf_code__startswith=naf)
+
+    # Mission 6, section 14 — filtres Signal Intelligence.
+    intent_min = request.GET.get("intent_min", "").strip()
+    if intent_min.isdigit():
+        qs = qs.filter(intent_score__gte=int(intent_min))
+
+    engagement_min = request.GET.get("engagement_min", "").strip()
+    if engagement_min.isdigit():
+        qs = qs.filter(engagement_score__gte=int(engagement_min))
+
+    signal_max_age = request.GET.get("signal_max_age", "").strip()
+    if signal_max_age.isdigit():
+        from datetime import timedelta
+        cutoff = timezone.now() - timedelta(days=int(signal_max_age))
+        qs = qs.filter(signals__observed_at__gte=cutoff).distinct()
+
+    if request.GET.get("has_linkedin"):
+        qs = qs.filter(
+            Q(contact_people__profile_url__gt="", contact_people__is_active=True)
+            | Q(social_links__platform="linkedin", social_links__is_active=True)
+        ).distinct()
+
+    if request.GET.get("has_email"):
+        qs = qs.exclude(public_email="")
+
+    in_market = request.GET.get("in_market", "").strip()
+    if in_market:
+        from .services.in_market_status import IN_MARKET_LEVELS
+        bounds = next(((low, high) for low, high, code, _label in IN_MARKET_LEVELS if code == in_market), None)
+        if bounds:
+            qs = qs.filter(intent_score__gte=bounds[0], intent_score__lte=bounds[1])
+
     qs = PROSPECT_LIST_FILTER_FUNCS.get(quick_filter, PROSPECT_LIST_FILTER_FUNCS["all"])(qs)
     return qs
 
@@ -111,19 +143,37 @@ def dashboard(request):
 
 @login_required
 def prospect_list(request):
+    from .services.linkedin_orchestration import linkedin_profile_url
+    from .services.next_best_action import NBA_CODES, compute_next_best_action
+    from .services.signal_freshness import signal_age_days
+
     base_qs = Prospect.objects.filter(selected_for_prospecting=True)
     filter_options = [
         {"key": key, "label": label, "count": fn(base_qs).count()}
         for key, label, fn in PROSPECT_LIST_FILTERS
     ]
+
+    prospects = list(filtered_prospects(request))
+    for p in prospects:
+        last_signal = p.signals.order_by("-observed_at", "-detected_at").first()
+        p.last_signal = last_signal
+        p.last_signal_age_days = signal_age_days(last_signal.observed_at or last_signal.detected_at) if last_signal else None
+        p.has_linkedin_contact = bool(linkedin_profile_url(p))
+        p.nba = compute_next_best_action(p)
+
+    nba_filter = request.GET.get("nba", "").strip()
+    if nba_filter:
+        prospects = [p for p in prospects if p.nba["code"] == nba_filter]
+
     return render(
         request,
         "prospects/list.html",
         {
-            "prospects": filtered_prospects(request),
+            "prospects": prospects,
             "statuses": Prospect.STATUS_CHOICES,
             "filter_options": filter_options,
             "active_filter": request.GET.get("filter", "all"),
+            "nba_codes": NBA_CODES,
         },
     )
 
@@ -216,6 +266,14 @@ def prospect_detail(request, pk):
     email_templates = EmailTemplate.objects.filter(active=True).order_by("name")
     email_sends = prospect.email_sends.select_related("template").all()[:8]
 
+    # Mission 6, section 14 — "Pourquoi contacter cette entreprise maintenant ?"
+    from .services.in_market_status import in_market_status
+    from .services.linkedin_orchestration import linkedin_profile_url
+    from .services.next_best_action import compute_next_best_action
+    from .services.signal_freshness import signal_age_days
+
+    last_signal = prospect.signals.order_by("-observed_at", "-detected_at").first()
+
     return render(
         request,
         "prospects/detail.html",
@@ -247,6 +305,12 @@ def prospect_detail(request, pk):
             "predictneed_conversions": prospect.conversion_events.all(),
             "predictneed_revenue": prospect.revenue_attributions.all(),
             "predictneed_timeline": build_prospect_timeline(prospect),
+            "predictneed_in_market": in_market_status(prospect),
+            "predictneed_nba": compute_next_best_action(prospect),
+            "predictneed_linkedin_url": linkedin_profile_url(prospect),
+            "predictneed_last_signal": last_signal,
+            "predictneed_last_signal_age_days": signal_age_days(last_signal.observed_at or last_signal.detected_at) if last_signal else None,
+            "predictneed_decision_maker": prospect.contact_people.filter(is_active=True).order_by("-confidence_score").first(),
         },
     )
 

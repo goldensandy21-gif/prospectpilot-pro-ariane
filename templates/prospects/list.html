@@ -18,8 +18,27 @@
 </section>
 
 <section class="container-fluid px-lg-4 pb-5">
-  <form class="filter-bar compact" method="get">
+  <form class="filter-bar compact flex-wrap gap-2" method="get">
     <input name="q" value="{{ request.GET.q }}" placeholder="Entreprise, secteur, ville ou domaine">
+    <input type="number" name="intent_min" value="{{ request.GET.intent_min }}" placeholder="Intent min" min="0" max="100" style="width:110px">
+    <input type="number" name="engagement_min" value="{{ request.GET.engagement_min }}" placeholder="Engagement min" min="0" max="100" style="width:140px">
+    <select name="signal_max_age">
+      <option value="">Signal — toute ancienneté</option>
+      <option value="7" {% if request.GET.signal_max_age == "7" %}selected{% endif %}>Signal &lt; 7 jours</option>
+      <option value="30" {% if request.GET.signal_max_age == "30" %}selected{% endif %}>Signal &lt; 30 jours</option>
+    </select>
+    <select name="in_market">
+      <option value="">In market — tous</option>
+      <option value="emerging" {% if request.GET.in_market == "emerging" %}selected{% endif %}>Signaux émergents</option>
+      <option value="probable" {% if request.GET.in_market == "probable" %}selected{% endif %}>Intention probable</option>
+      <option value="strong" {% if request.GET.in_market == "strong" %}selected{% endif %}>Intention forte</option>
+    </select>
+    <select name="nba">
+      <option value="">Action recommandée — toutes</option>
+      {% for code in nba_codes %}<option value="{{ code }}" {% if request.GET.nba == code %}selected{% endif %}>{{ code }}</option>{% endfor %}
+    </select>
+    <label class="d-flex align-items-center gap-1"><input type="checkbox" name="has_linkedin" value="1" {% if request.GET.has_linkedin %}checked{% endif %}> LinkedIn dispo.</label>
+    <label class="d-flex align-items-center gap-1"><input type="checkbox" name="has_email" value="1" {% if request.GET.has_email %}checked{% endif %}> E-mail dispo.</label>
     <button class="btn btn-dark">Filtrer</button>
   </form>
 
@@ -36,8 +55,8 @@
         <thead>
           <tr>
             <th><input type="checkbox" id="select-all-prospects"></th>
-            <th>Entreprise</th><th>Secteur</th><th>Ville</th><th>Site</th><th>Email</th>
-            <th>Score</th><th>Grade</th><th>Statut</th><th>Dernière action</th><th></th>
+            <th>Entreprise</th><th>FIT</th><th>INTENT</th><th>ENGAGEMENT</th><th>Priorité</th>
+            <th>Dernier signal</th><th>Âge</th><th>Email</th><th>LinkedIn</th><th>Action recommandée</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -45,18 +64,19 @@
             <tr>
               <td><input type="checkbox" class="prospect-checkbox" value="{{ p.pk }}"></td>
               <td>{{ p.name }}</td>
-              <td>{{ p.sector|default:"—" }}</td>
-              <td>{{ p.city|default:"—" }}</td>
-              <td>{% if p.website %}<a href="{{ p.website }}" target="_blank"><i class="bi bi-check-circle text-success"></i></a>{% else %}—{% endif %}</td>
+              <td>{{ p.icp_fit_score }}</td>
+              <td>{{ p.intent_score }}</td>
+              <td>{{ p.engagement_score }}</td>
+              <td>{{ p.predictneed_acquisition_score }}{% if p.predictneed_grade %} <span class="grade-badge grade-{{ p.predictneed_grade }}">{{ p.predictneed_grade }}</span>{% endif %}</td>
+              <td>{{ p.last_signal.label|default:"—"|truncatechars:28 }}</td>
+              <td>{% if p.last_signal_age_days is not None %}{{ p.last_signal_age_days|floatformat:0 }}j{% else %}—{% endif %}</td>
               <td>{{ p.public_email|default:"—" }}</td>
-              <td>{{ p.predictneed_acquisition_score }}/100</td>
-              <td>{% if p.predictneed_grade %}<span class="grade-badge grade-{{ p.predictneed_grade }}">{{ p.predictneed_grade }}</span>{% else %}—{% endif %}</td>
-              <td>{{ p.get_predictneed_stage_display|default:p.get_status_display }}</td>
-              <td>{{ p.last_contacted_at|date:"d/m/Y"|default:"—" }}</td>
+              <td>{% if p.has_linkedin_contact %}<i class="bi bi-linkedin text-primary"></i>{% else %}—{% endif %}</td>
+              <td><span class="status-pill">{{ p.nba.code }}</span></td>
               <td><a href="{% url 'prospect_detail' p.pk %}">Ouvrir <i class="bi bi-arrow-up-right"></i></a></td>
             </tr>
           {% empty %}
-            <tr><td colspan="11">Aucun prospect pour ce filtre. Va dans « Trouver des prospects » pour en sélectionner.</td></tr>
+            <tr><td colspan="12">Aucun prospect pour ce filtre. Va dans « Trouver des prospects » pour en sélectionner.</td></tr>
           {% endfor %}
         </tbody>
       </table>

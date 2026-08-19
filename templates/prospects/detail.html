@@ -87,6 +87,52 @@
     {% endif %}
     {% endif %}
 
+    <div class="cockpit-card mt-4" style="background:#f8f9fb;border:1px solid #e5e7eb;border-radius:12px;padding:1.25rem;">
+      <h3 class="h5 mb-3">Pourquoi contacter cette entreprise maintenant ?</h3>
+      <div class="row g-3 mb-3">
+        <div class="col-6 col-md-3">
+          <div class="text-muted small">FIT</div>
+          <div class="h4 mb-0">{{ prospect.icp_fit_score }}<small class="text-muted">/100</small></div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted small">INTENT</div>
+          <div class="h4 mb-0">{{ prospect.intent_score }}<small class="text-muted">/100</small></div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted small">ENGAGEMENT</div>
+          <div class="h4 mb-0">{{ prospect.engagement_score }}<small class="text-muted">/100</small></div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted small">PRIORITÉ</div>
+          <div class="h4 mb-0">{{ prospect.predictneed_acquisition_score }}<small class="text-muted">/100</small></div>
+        </div>
+      </div>
+      <p><strong>{{ predictneed_in_market.label }}</strong> — {{ predictneed_in_market.phrase }}</p>
+      {% if prospect.intent_score_reasons %}
+        <details class="mt-1"><summary>Pourquoi cet Intent ?</summary><ul>{% for r in prospect.intent_score_reasons %}<li>{{ r }}</li>{% endfor %}</ul></details>
+      {% endif %}
+      {% if prospect.engagement_score_reasons %}
+        <details class="mt-1"><summary>Pourquoi cet Engagement ?</summary><ul>{% for r in prospect.engagement_score_reasons %}<li>{{ r }}</li>{% endfor %}</ul></details>
+      {% endif %}
+      <div class="row mt-3">
+        <div class="col-md-6">
+          <p class="mb-1"><strong>Dernier signal :</strong>
+            {% if predictneed_last_signal %}{{ predictneed_last_signal.label }} ({% if predictneed_last_signal_age_days is not None %}il y a {{ predictneed_last_signal_age_days|floatformat:0 }} jour(s){% else %}date inconnue{% endif %}, source : {{ predictneed_last_signal.get_source_kind_display }}){% else %}aucun signal détecté{% endif %}
+          </p>
+          <p class="mb-1"><strong>Décideur :</strong>
+            {% if predictneed_decision_maker %}{{ predictneed_decision_maker.full_name|default:"contact identifié" }}{% if predictneed_decision_maker.job_title %} — {{ predictneed_decision_maker.job_title }}{% endif %}{% else %}aucun décideur identifié{% endif %}
+          </p>
+        </div>
+        <div class="col-md-6">
+          <p class="mb-1"><strong>Action recommandée :</strong> {{ predictneed_nba.code }}</p>
+          <p class="mb-1"><strong>Pourquoi :</strong> {{ predictneed_nba.reason }}</p>
+          {% if predictneed_linkedin_url %}
+            <p class="mb-1"><strong>LinkedIn :</strong> <a href="{{ predictneed_linkedin_url }}" target="_blank">Voir le profil</a></p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
     <div class="row mt-4">
       <div class="col-md-6">
         <h3 class="h6">Signaux détectés</h3>

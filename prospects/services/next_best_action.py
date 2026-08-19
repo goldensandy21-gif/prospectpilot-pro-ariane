@@ -13,6 +13,10 @@ from .signal_freshness import signal_freshness
 
 STOP_OUTCOMES = {"optout", "won", "lost"}
 FOLLOW_UP_OUTCOMES = {"replied", "meeting", "proposal"}
+
+# Mission 6, section 14 — liste des codes possibles, pour peupler le filtre
+# "Action recommandée" de la liste Prospects sans la recopier ailleurs.
+NBA_CODES = ["STOP", "FOLLOW_UP", "WAIT", "LINKEDIN_CONNECT", "LINKEDIN_MESSAGE", "EMAIL", "WATCH", "NURTURE"]
 RECENT_CONTACT_GRACE_DAYS = 3
 HIGH_INTENT_THRESHOLD = 60
 EMERGING_INTENT_THRESHOLD = 30
