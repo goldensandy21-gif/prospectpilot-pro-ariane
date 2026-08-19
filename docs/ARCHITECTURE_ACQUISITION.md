@@ -203,18 +203,47 @@ jamais réellement, aucun bot Selenium/Playwright. `MockLinkedInProvider`
 réservé aux tests. Tout persisté dans `ContactLog(channel="linkedin")` avec
 les états `invitation_prepared/sent/accepted/declined`, `message_prepared`.
 
+## Architecture SignalCollector (section 8)
+
+`services/signal_collectors.py` — interface commune `SignalCollector.collect(prospect)`,
+qui renvoie des `ProspectSignal` non sauvegardés, tous persistés par
+`run_signal_collectors()` via `persist_signals()` (donc avec la même
+déduplication par empreinte que tout le reste). Quatre collecteurs, pas
+quinze : deux encapsulent des fonctions déjà existantes sans nouvelle
+logique (`TechnologySignalCollector`, `QuickScanSignalCollector`), deux sont
+réellement nouveaux parce que la donnée existait déjà mais ne produisait
+encore aucun signal :
+
+- `SocialPresenceSignalCollector` — une présence sociale confirmée
+  (`PublicSocialLink`) devient un signal de contactabilité/FIT. Câblé dans
+  `acquisition_pipeline.py::_finalize_candidate`, juste après la création
+  des `PublicSocialLink`.
+- `DecisionMakerSignalCollector` — un décideur identifié avec un intitulé de
+  poste pertinent (`ContactPerson.job_title`) devient un signal de FIT,
+  jamais d'INTENT (on ne sait pas si ce contact vient d'être nommé). Testé
+  et prêt, mais **pas encore câblé en production** : aucun code actuel ne
+  renseigne `ContactPerson.job_title` (vérifié par recherche exhaustive dans
+  `enrichment.py`/`tasks.py`/`views.py`) — le câbler maintenant produirait un
+  collecteur mort. À relier le jour où une source alimente ce champ.
+
+Délibérément exclus : `ProspectEvidence` en tant que collecteur générique
+(bruiterait avec des doublons de PublicEmail/PublicPhone/ContactPerson déjà
+couverts), et `SearchConsoleMetric`/PageSpeed (pipeline d'audit technique
+historique, séparé du parcours unifié Mission 5, `SearchConsoleMetric` n'a
+même pas de clé étrangère vers `Prospect`).
+
 ## État d'avancement de la Mission 6
 
-Réalisé et testé (201 tests, migrations 0007-0009 vérifiées sur Postgres 18
+Réalisé et testé (214 tests, migrations 0007-0009 vérifiées sur Postgres 18
 réel) : consolidation ProspectSignal (dédoublonnage par empreinte), fraîcheur
 canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next Best Action
 structurée, orchestration LinkedIn (provider manuel/mock), timeline étendue,
-tests de non-régression et de protection des données.
+architecture SignalCollector, tests de non-régression et de protection des
+données.
 
 Restant (non commencé à ce stade) : séquences multicanal sur
-Campaign/CampaignProspect (section 11), architecture SignalCollector pour de
-nouvelles sources de signaux (section 8), alertes Celery (section 15),
-garde-fous de génération de message (section 16), tableaux d'analytics
+Campaign/CampaignProspect (section 11), garde-fous de génération de message
+(section 16), alertes Celery (section 15), tableaux d'analytics
 (section 17), mise à jour des templates Prospects/fiche prospect (section
 14), tests UX en navigateur et scénario métier bout-en-bout complet avec
 vérification visuelle (section 20).

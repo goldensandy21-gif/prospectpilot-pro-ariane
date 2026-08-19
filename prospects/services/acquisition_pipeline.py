@@ -20,6 +20,7 @@ from .agent_brief import generate_agent_brief
 from .company_search import fetch_all_companies
 from .prescoring import preselect_top_candidates, registry_pre_score
 from .predictneed_scoring import score_prospect
+from .signal_collectors import SocialPresenceSignalCollector, run_signal_collectors
 from .signals import (
     build_competitor_detections,
     build_signals_from_quick_scan,
@@ -263,6 +264,11 @@ def _finalize_candidate(candidate, quick_data, technologies, prospect, icp, prod
         + build_signals_from_quick_scan(prospect, quick_data, site_url=candidate.site_url)
     )
     persist_signals(prospect, signal_objects)
+    # Mission 6, section 8 : les liens sociaux (PublicSocialLink) viennent d'être
+    # écrits ci-dessus (247-252) mais ne produisaient jusqu'ici aucun signal —
+    # SocialPresenceSignalCollector comble ce manque sans dupliquer la détection
+    # technologies/quick scan déjà faite juste au-dessus.
+    run_signal_collectors(prospect, collectors=[SocialPresenceSignalCollector()])
     persist_competitor_detections(prospect, build_competitor_detections(prospect, technologies, site_url=candidate.site_url))
 
     # --- score final + AgentBrief -------------------------------------------------
