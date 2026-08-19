@@ -539,6 +539,14 @@ class ContactLog(models.Model):
     OUTCOMES = [
         ("sent","Envoyé"),("opened","Ouvert"),("replied","Réponse"),("meeting","Rendez-vous"),
         ("proposal","Proposition"),("won","Client"),("lost","Refus"),("optout","Opposition"),
+        # Mission 6, section 10 — cycle de vie d'une invitation/message LinkedIn.
+        # Réutilise ContactLog(channel="linkedin") plutôt qu'un second modèle de
+        # contact ; voir services/linkedin_orchestration.py.
+        ("invitation_prepared", "Invitation préparée (non envoyée)"),
+        ("invitation_sent", "Invitation envoyée"),
+        ("invitation_accepted", "Invitation acceptée"),
+        ("invitation_declined", "Invitation refusée ou expirée"),
+        ("message_prepared", "Message préparé (non envoyé)"),
     ]
     prospect = models.ForeignKey(Prospect, related_name="contact_logs", on_delete=models.CASCADE)
     channel = models.CharField(max_length=20, choices=CHANNELS, default="email")
@@ -548,6 +556,11 @@ class ContactLog(models.Model):
     response_text = models.TextField(blank=True)
     follow_up_at = models.DateTimeField(null=True, blank=True)
     contacted_at = models.DateTimeField(auto_now_add=True)
+    # Mission 6 : provenance de l'action (provider utilisé, dry_run...) — sur
+    # le même modèle que EngagementEvent.metadata, jamais de données bancaires
+    # ni d'identifiants de connexion.
+    metadata = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
 class Suppression(models.Model):
     email = models.EmailField(blank=True)

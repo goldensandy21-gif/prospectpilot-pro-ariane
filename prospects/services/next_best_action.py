@@ -8,6 +8,7 @@ confiance et le signal déclencheur. Écrit toujours dans le champ existant
 de recommandation, aucune nouvelle table.
 """
 from ..models import ContactLog, Suppression
+from .linkedin_orchestration import linkedin_profile_url
 from .signal_freshness import signal_freshness
 
 STOP_OUTCOMES = {"optout", "won", "lost"}
@@ -32,14 +33,6 @@ def _is_excluded(prospect):
 
 def _best_email(prospect):
     return prospect.public_emails.filter(is_active=True).order_by("-is_primary", "-confidence_score").first()
-
-
-def _linkedin_contact(prospect):
-    person = prospect.contact_people.filter(is_active=True).exclude(profile_url="").order_by("-confidence_score").first()
-    if person:
-        return person.profile_url
-    link = prospect.social_links.filter(platform="linkedin", is_active=True).first()
-    return link.url if link else ""
 
 
 def _most_recent_signal(prospect, signal_group=None):
@@ -92,7 +85,7 @@ def compute_next_best_action(prospect, now=None):
 
     intent_score = prospect.intent_score
     has_email = _best_email(prospect) is not None
-    has_linkedin = bool(_linkedin_contact(prospect))
+    has_linkedin = bool(linkedin_profile_url(prospect))
     contacted_linkedin_before = prospect.contact_logs.filter(channel="linkedin").exists()
     contacted_email_before = prospect.contact_logs.filter(channel="email").exists()
 
