@@ -553,6 +553,13 @@ class CampaignProspect(models.Model):
     converted_at = models.DateTimeField(null=True, blank=True)
     excluded_reason = models.CharField(max_length=255, blank=True)
 
+    # Mission 6, section 11 — position dans la séquence multicanal : l'étape
+    # dont l'action a été exécutée en dernier (None = aucune étape encore
+    # exécutée). Sert à garantir qu'une seule action est en vol à la fois —
+    # voir services/campaign_sequencing.py.
+    current_step = models.ForeignKey("prospects.EmailStep", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    current_step_started_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -589,11 +596,31 @@ class EmailSequence(models.Model):
 
 
 class EmailStep(models.Model):
+    # Mission 6, section 11 — une étape de séquence n'est plus forcément un
+    # e-mail : reste le même modèle/la même table (pas de second système de
+    # campagne), une étape LinkedIn utilise juste `channel` au lieu d'un
+    # EmailVariant. `delay_days` continue de porter le délai depuis l'étape
+    # précédente pour toutes les étapes, y compris LinkedIn.
+    CHANNELS = [
+        ("email", "E-mail"),
+        ("linkedin_connect", "Invitation LinkedIn"),
+        ("linkedin_message", "Message LinkedIn"),
+    ]
+    # Condition à satisfaire, EN PLUS du délai, avant d'exécuter cette étape.
+    # "always" reproduit exactement le comportement historique (délai seul) —
+    # aucune régression pour les séquences e-mail existantes.
+    ADVANCE_CONDITIONS = [
+        ("always", "Toujours (délai seul)"),
+        ("linkedin_accepted", "Invitation LinkedIn acceptée"),
+    ]
+
     sequence = models.ForeignKey(EmailSequence, related_name="steps", on_delete=models.CASCADE)
     order = models.PositiveSmallIntegerField(default=1)
     delay_days = models.PositiveSmallIntegerField(default=0, help_text="Délai depuis l'étape précédente (0 = premier email).")
     name = models.CharField(max_length=160, blank=True)
     active = models.BooleanField(default=True)
+    channel = models.CharField(max_length=20, choices=CHANNELS, default="email")
+    advance_condition = models.CharField(max_length=30, choices=ADVANCE_CONDITIONS, default="always")
 
     class Meta:
         ordering = ["sequence", "order"]

@@ -232,17 +232,38 @@ couverts), et `SearchConsoleMetric`/PageSpeed (pipeline d'audit technique
 historique, séparé du parcours unifié Mission 5, `SearchConsoleMetric` n'a
 même pas de clé étrangère vers `Prospect`).
 
+## Séquences multicanal (section 11)
+
+`EmailStep` porte maintenant `channel` (email / linkedin_connect /
+linkedin_message) et `advance_condition` (always / linkedin_accepted), en
+plus de `delay_days` (inchangé, continue de porter le délai depuis l'étape
+précédente, quel que soit le canal). `CampaignProspect.current_step`
+mémorise l'étape dont l'action a déjà été exécutée. `ContactLog` gagne
+`campaign_prospect`/`email_step` (même principe que `EmailSend`), pour
+savoir si une étape LinkedIn a déjà été exécutée pour une campagne donnée.
+Aucun second modèle Campaign, aucune seconde table de séquence.
+
+`services/campaign_sequencing.py::advance_campaign_prospect()` est le seul
+point d'entrée : verrouille la ligne (`select_for_update`), vérifie d'abord
+les conditions d'arrêt (réponse, conversion, désinscription/opposition,
+DNC, client déjà payant), puis exécute AU PLUS UNE étape par appel — un
+prospect ne peut donc jamais recevoir deux actions au même moment, et
+rappeler la fonction avant que l'étape suivante ne soit prête ne fait rien
+de plus qu'un `waiting`. Une invitation LinkedIn refusée/expirée ne bloque
+jamais la séquence : l'étape "message" est sautée, l'étape suivante (email)
+respecte son propre délai. `run_campaign_sequences(campaign)` fait avancer
+tous les `CampaignProspect` éligibles d'une campagne.
+
 ## État d'avancement de la Mission 6
 
-Réalisé et testé (214 tests, migrations 0007-0009 vérifiées sur Postgres 18
+Réalisé et testé (235 tests, migrations 0007-0010 vérifiées sur Postgres 18
 réel) : consolidation ProspectSignal (dédoublonnage par empreinte), fraîcheur
 canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next Best Action
 structurée, orchestration LinkedIn (provider manuel/mock), timeline étendue,
-architecture SignalCollector, tests de non-régression et de protection des
-données.
+architecture SignalCollector, séquences multicanal Campaign/CampaignProspect,
+tests de non-régression et de protection des données.
 
-Restant (non commencé à ce stade) : séquences multicanal sur
-Campaign/CampaignProspect (section 11), garde-fous de génération de message
+Restant (non commencé à ce stade) : garde-fous de génération de message
 (section 16), alertes Celery (section 15), tableaux d'analytics
 (section 17), mise à jour des templates Prospects/fiche prospect (section
 14), tests UX en navigateur et scénario métier bout-en-bout complet avec

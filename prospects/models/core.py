@@ -549,6 +549,15 @@ class ContactLog(models.Model):
         ("message_prepared", "Message préparé (non envoyé)"),
     ]
     prospect = models.ForeignKey(Prospect, related_name="contact_logs", on_delete=models.CASCADE)
+    # Mission 6, section 11 — même principe que EmailSend.campaign_prospect/
+    # email_step : permet de savoir si UNE étape précise d'UNE campagne a déjà
+    # été exécutée pour ce prospect (donc de ne jamais la rejouer), tout en
+    # laissant ces deux champs vides pour un ContactLog manuel hors campagne.
+    campaign_prospect = models.ForeignKey(
+        "prospects.CampaignProspect", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="contact_logs",
+    )
+    email_step = models.ForeignKey("prospects.EmailStep", null=True, blank=True, on_delete=models.SET_NULL)
     channel = models.CharField(max_length=20, choices=CHANNELS, default="email")
     subject = models.CharField(max_length=255, blank=True)
     message = models.TextField(blank=True)
