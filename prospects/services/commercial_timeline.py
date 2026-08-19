@@ -3,7 +3,28 @@
 Construite uniquement à partir d'événements réellement enregistrés
 (EngagementEvent, EmailSend, ConversionEvent, CrawlRun, PublicEmail...) —
 jamais une étape fictive ou déduite.
+
+Mission 6, section 13 : étend cette même timeline (signal détecté,
+invitation/message LinkedIn, recalcul de score, NBA importante) plutôt que
+de créer un second modèle d'événements — toujours à partir de lignes
+réellement enregistrées (ProspectSignal.observed_at, ContactLog, AgentBrief),
+jamais une étape déduite.
 """
+LINKEDIN_OUTCOME_LABELS = {
+    "invitation_prepared": "Invitation LinkedIn préparée",
+    "invitation_sent": "Invitation LinkedIn envoyée",
+    "invitation_accepted": "Invitation LinkedIn acceptée",
+    "invitation_declined": "Invitation LinkedIn refusée ou expirée",
+    "message_prepared": "Message LinkedIn préparé",
+    "sent": "Message LinkedIn envoyé",
+    "replied": "Réponse LinkedIn reçue",
+}
+
+# NBA jugées "importantes" pour la timeline (mission 6, section 13) : on
+# n'affiche pas WAIT/WATCH/NURTURE à chaque recalcul, uniquement les actions
+# concrètes recommandées, pour ne pas noyer la timeline.
+NOTABLE_NBA_CODES = {"LINKEDIN_CONNECT", "LINKEDIN_MESSAGE", "EMAIL", "FOLLOW_UP", "STOP"}
+
 EVENT_LABELS = {
     "email_sent": "E-mail envoyé",
     "email_failed": "Échec d'envoi e-mail",
@@ -70,6 +91,38 @@ def build_prospect_timeline(prospect):
             "label": conversion.get_event_type_display(),
             "meta": conversion.external_reference, "predictneed": True,
         })
+
+    for signal in prospect.signals.all():
+        entries.append({
+            "at": signal.observed_at or signal.detected_at,
+            "label": f"Signal détecté : {signal.label}",
+            "meta": signal.get_signal_group_display(), "predictneed": False,
+        })
+
+    for log in prospect.contact_logs.filter(channel="linkedin"):
+        entries.append({
+            "at": log.contacted_at,
+            "label": LINKEDIN_OUTCOME_LABELS.get(log.outcome, f"LinkedIn : {log.get_outcome_display()}"),
+            "meta": log.subject, "predictneed": False,
+        })
+
+    if prospect.scores_computed_at:
+        entries.append({
+            "at": prospect.scores_computed_at,
+            "label": "Scores INTENT/ENGAGEMENT recalculés",
+            "meta": f"Intent {prospect.intent_score}, Engagement {prospect.engagement_score}",
+            "predictneed": False,
+        })
+
+    latest_brief = prospect.agent_briefs.order_by("-generated_at").first()
+    if latest_brief and latest_brief.next_best_action:
+        code = latest_brief.next_best_action.split(" — ", 1)[0]
+        if code in NOTABLE_NBA_CODES:
+            entries.append({
+                "at": latest_brief.generated_at,
+                "label": f"Action recommandée : {code}",
+                "meta": latest_brief.next_best_action, "predictneed": False,
+            })
 
     entries = [e for e in entries if e["at"] is not None]
     entries.sort(key=lambda e: e["at"])
