@@ -141,5 +141,80 @@ Légende : **EXISTE** / **EXISTE PARTIELLEMENT** / **ABSENTE** / **LEGACY À NE 
   campagne/ICP/grade.
 - **Réglages** : identité e-mail, Search Console, import.
 
-Ce document sera complété au fil de la Mission 6 avec les formules FIT/INTENT/
-ENGAGEMENT et le détail LinkedIn/multicanal une fois implémentés.
+## Formules FIT / INTENT / ENGAGEMENT (implémentées)
+
+**FIT** = `Prospect.icp_fit_score` (inchangé, `services/predictneed_scoring.py`).
+Structure de l'entreprise : secteur, NAF, taille, localisation, ICP. Aucun
+nouveau champ, aucune nouvelle formule.
+
+**INTENT** (`services/intent_scoring.py`, écrit dans `Prospect.intent_score`) :
+```
+score = 20 (base)
+      + somme des impacts ACTUELS des signaux signal_group="intent"
+        (impact actuel = score_impact brut × multiplicateur de fraîcheur,
+         voir services/signal_freshness.py)
+      + bonus de répétition si ≥ 2 signaux récents (< 7 jours) :
+        min(20, (nb_signaux_récents - 1) × 4)
+score = clip(score, 0, 100)
+```
+Ne lit JAMAIS les signaux `signal_group="fit"` (un outil analytics détecté
+reste un indice de maturité, jamais une intention d'achat à lui seul).
+
+**Fraîcheur** (`services/signal_freshness.py`, fonction unique
+`signal_freshness()`) : 0-3j → ×1.0 ("très frais"), 4-7j → ×0.75 ("frais"),
+8-30j → ×0.5 ("récent"), 31-90j → ×0.2 ("ancien"), au-delà → ×0.0
+("obsolète", la ligne reste en base mais ne pèse plus).
+
+**ENGAGEMENT** (`services/engagement_scoring.py`, écrit dans
+`Prospect.engagement_score`) :
+```
+score = somme, pour chaque EngagementEvent, de :
+        poids_du_type_évènement × multiplicateur_de_fraîcheur(occurred_at)
+```
+Poids : link_clicked 10, product_visited 15, simulator_started 20,
+simulator_completed 30, signup_started 25, signup_completed 40,
+checkout_started 45, subscription_activated 60, subscription_cancelled -30.
+`email_sent`/`email_failed` exclus (action sortante, pas un engagement du
+prospect). Aucun événement enregistré → score 0 (jamais une valeur neutre
+inventée).
+
+**PRIORITÉ** = `Prospect.predictneed_acquisition_score` (inchangé, affiché
+"Priorité"). FIT/INTENT/ENGAGEMENT sont ses composantes explicables, pas un
+cinquième score concurrent.
+
+**IN MARKET NOW** (`services/in_market_status.py`) : statut calculé à partir
+d'`intent_score` (0-19 aucun signal, 20-39 faibles, 40-59 émergents, 60-79
+probable, 80-100 forte), toujours formulé au conditionnel ("Signaux
+compatibles avec une intention d'achat probable."), jamais une affirmation
+absolue.
+
+**NEXT BEST ACTION** (`services/next_best_action.py`, écrit dans le champ
+existant `AgentBrief.next_best_action`) : arbre déterministe — exclusions/
+opt-out → STOP ; réponse en attente de suivi → FOLLOW_UP ; contact très
+récent sans réponse → WAIT (délai de politesse) ; puis selon `intent_score`
+et les canaux disponibles (LinkedIn via `ContactPerson.profile_url` /
+`PublicSocialLink`, e-mail via `PublicEmail`) → LINKEDIN_CONNECT /
+LINKEDIN_MESSAGE / EMAIL / WATCH ; sinon NURTURE (bon fit, pas d'intent) ou
+WAIT.
+
+**LinkedIn** (`services/linkedin_provider.py` + `linkedin_orchestration.py`) :
+provider par défaut `ManualLinkedInProvider` — prépare le contenu, n'envoie
+jamais réellement, aucun bot Selenium/Playwright. `MockLinkedInProvider`
+réservé aux tests. Tout persisté dans `ContactLog(channel="linkedin")` avec
+les états `invitation_prepared/sent/accepted/declined`, `message_prepared`.
+
+## État d'avancement de la Mission 6
+
+Réalisé et testé (201 tests, migrations 0007-0009 vérifiées sur Postgres 18
+réel) : consolidation ProspectSignal (dédoublonnage par empreinte), fraîcheur
+canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next Best Action
+structurée, orchestration LinkedIn (provider manuel/mock), timeline étendue,
+tests de non-régression et de protection des données.
+
+Restant (non commencé à ce stade) : séquences multicanal sur
+Campaign/CampaignProspect (section 11), architecture SignalCollector pour de
+nouvelles sources de signaux (section 8), alertes Celery (section 15),
+garde-fous de génération de message (section 16), tableaux d'analytics
+(section 17), mise à jour des templates Prospects/fiche prospect (section
+14), tests UX en navigateur et scénario métier bout-en-bout complet avec
+vérification visuelle (section 20).
