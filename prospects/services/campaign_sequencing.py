@@ -23,6 +23,7 @@ from django.utils import timezone
 
 from ..models import CampaignProspect, ConversionEvent, Suppression
 from .linkedin_orchestration import linkedin_profile_url, send_invitation, send_message
+from .message_guardrails import build_personalization_snippet
 from .predictneed_email import send_predictneed_campaign_email
 from .signal_freshness import signal_freshness
 
@@ -148,6 +149,17 @@ def advance_campaign_prospect(campaign_prospect_id, now=None, linkedin_provider=
         return _execute_step(campaign_prospect, step, now, linkedin_provider)
 
 
+def _build_linkedin_message(prospect):
+    """Mission 6, section 16 : personnalisation limitée aux phrases
+    pré-approuvées de message_guardrails.py — jamais une affirmation
+    d'intention inventée à partir d'un simple signal de maturité."""
+    phrases = build_personalization_snippet(prospect)
+    if phrases:
+        observation = " et ".join(phrases)
+        return f"Bonjour, j'ai remarqué que {observation}. Je vous partage volontiers un exemple concret d'utilisation de PredictNeed IA."
+    return "Bonjour, je vous partage volontiers un exemple concret d'utilisation de PredictNeed IA pour votre activité."
+
+
 def _execute_step(campaign_prospect, step, now, linkedin_provider):
     prospect = campaign_prospect.prospect
 
@@ -166,7 +178,7 @@ def _execute_step(campaign_prospect, step, now, linkedin_provider):
         if not linkedin_profile_url(prospect):
             _mark_step_done(campaign_prospect, step, now)
             return {"action": "skipped_no_linkedin_profile", "step": step.name}
-        variant_message = f"Suite à notre mise en relation, {prospect.name} pourrait être intéressé par PredictNeed IA."
+        variant_message = _build_linkedin_message(prospect)
         log = send_message(prospect, variant_message, provider=linkedin_provider)
         log.campaign_prospect = campaign_prospect
         log.email_step = step

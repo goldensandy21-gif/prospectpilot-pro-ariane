@@ -254,17 +254,36 @@ jamais la séquence : l'étape "message" est sautée, l'étape suivante (email)
 respecte son propre délai. `run_campaign_sequences(campaign)` fait avancer
 tous les `CampaignProspect` éligibles d'une campagne.
 
+## Garde-fous de personnalisation des messages (section 16)
+
+`services/message_guardrails.py` : aucune génération libre de texte.
+`SAFE_PHRASE_TEMPLATES` est un dictionnaire fermé `signal_type -> phrase
+pré-approuvée`, seule source de vérité — un `signal_type` non répertorié ne
+produit AUCUNE phrase (silence plutôt qu'invention). Chaque phrase reste au
+niveau du fait observé, y compris pour les signaux INTENT (ex. "votre site
+propose un formulaire de contact", jamais "vous cherchez à convertir plus").
+`assert_no_overclaiming(text)` détecte les formulations d'intention non
+prouvée ("vous cherchez", "vous voulez acheter"...) et sert à la fois de
+garde-fou de test et de vérification appelable avant tout envoi réel.
+
+Cas explicitement interdit et testé : un signal `analytics_detected` (FIT —
+Google Analytics détecté) ne peut jamais produire une phrase mentionnant une
+intention d'"analyse comportementale" (qui serait le signal, différent,
+`behaviour_analytics_detected`). Le message LinkedIn généré par
+`campaign_sequencing.py::_build_linkedin_message()` passe par cette même
+fonction — pas de personnalisation ad hoc en dehors du dictionnaire fermé.
+
 ## État d'avancement de la Mission 6
 
-Réalisé et testé (235 tests, migrations 0007-0010 vérifiées sur Postgres 18
+Réalisé et testé (246 tests, migrations 0007-0010 vérifiées sur Postgres 18
 réel) : consolidation ProspectSignal (dédoublonnage par empreinte), fraîcheur
 canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next Best Action
 structurée, orchestration LinkedIn (provider manuel/mock), timeline étendue,
 architecture SignalCollector, séquences multicanal Campaign/CampaignProspect,
-tests de non-régression et de protection des données.
+garde-fous de personnalisation des messages, tests de non-régression et de
+protection des données.
 
-Restant (non commencé à ce stade) : garde-fous de génération de message
-(section 16), alertes Celery (section 15), tableaux d'analytics
-(section 17), mise à jour des templates Prospects/fiche prospect (section
-14), tests UX en navigateur et scénario métier bout-en-bout complet avec
-vérification visuelle (section 20).
+Restant (non commencé à ce stade) : alertes Celery (section 15), tableaux
+d'analytics (section 17), mise à jour des templates Prospects/fiche prospect
+(section 14), tests UX en navigateur et scénario métier bout-en-bout complet
+avec vérification visuelle (section 20).
