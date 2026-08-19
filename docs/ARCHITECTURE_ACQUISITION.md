@@ -302,17 +302,36 @@ Dédoublonnage garanti par une contrainte unique
 `(prospect, alert_type, dedup_key)` — `get_or_create` ne peut jamais créer
 deux fois la même alerte pour le même événement.
 
+## Analytics (section 17)
+
+`services/signal_analytics.py` — aucune pseudo-IA qui réajuste des
+pondérations automatiquement : uniquement des comptages/taux robustes,
+réutilisant exclusivement `ProspectSignal`/`ContactLog`/`EngagementEvent`/
+`ConversionEvent`/`RevenueAttribution` et `EmailStep.channel` (bloc C). Sept
+fonctions : `signal_to_reply_counts`, `signal_to_click_counts`,
+`signal_to_signup_counts`, `signal_to_client_counts` (les quatre partagent
+un même helper générique `_signal_type_counts_for`, jamais quatre formules
+différentes), `conversion_rate_by_channel`, `conversion_rate_by_intent_band`
+(réutilise `IN_MARKET_LEVELS`, aucun second découpage de bandes),
+`mrr_by_signal_type` et `mrr_by_channel` (réutilise
+`RevenueAttribution.email_step.channel`). L'attribution MRR par signal est
+volontairement multi-attribution (un prospect avec plusieurs signal_type
+distincts contribue son MRR à chacun) mais ne compte jamais deux fois le
+même signal_type pour un même prospect. Une future optimisation
+automatique des poids pourra se construire sur ces données réelles — pas
+avant.
+
 ## État d'avancement de la Mission 6
 
-Réalisé et testé (264 tests, migrations 0007-0011 vérifiées sur Postgres 18
+Réalisé et testé (278 tests, migrations 0007-0011 vérifiées sur Postgres 18
 réel) : consolidation ProspectSignal (dédoublonnage par empreinte), fraîcheur
 canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next Best Action
 structurée, orchestration LinkedIn (provider manuel/mock), timeline étendue,
 architecture SignalCollector, séquences multicanal Campaign/CampaignProspect,
-garde-fous de personnalisation des messages, alertes, tests de non-régression
-et de protection des données.
+garde-fous de personnalisation des messages, alertes, analytics par
+signal/canal/bande d'Intent, tests de non-régression et de protection des
+données.
 
-Restant (non commencé à ce stade) : tableaux d'analytics (section 17), mise
-à jour des templates Prospects/fiche prospect (section 14), tests UX en
-navigateur et scénario métier bout-en-bout complet avec vérification
-visuelle (section 20).
+Restant (non commencé à ce stade) : mise à jour des templates Prospects/
+fiche prospect (section 14), tests UX en navigateur et scénario métier
+bout-en-bout complet avec vérification visuelle (section 20).
