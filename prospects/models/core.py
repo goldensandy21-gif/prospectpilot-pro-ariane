@@ -76,6 +76,17 @@ class Prospect(models.Model):
     predictneed_grade = models.CharField(max_length=1, choices=PREDICTNEED_GRADES, blank=True, db_index=True)
     predictneed_score_reasons = models.JSONField(default=list, blank=True)
 
+    # Mission 6 — FIT/INTENT/ENGAGEMENT. Ne remplacent pas predictneed_acquisition_score
+    # (qui reste le score de PRIORITÉ affiché) : ce sont ses composantes explicables.
+    # FIT réutilise icp_fit_score ci-dessus (pas de nouveau champ). INTENT et
+    # ENGAGEMENT sont calculés par services/intent_scoring.py et
+    # services/engagement_scoring.py, jamais recalculés ailleurs.
+    intent_score = models.PositiveSmallIntegerField(default=0, db_index=True)
+    intent_score_reasons = models.JSONField(default=list, blank=True)
+    engagement_score = models.PositiveSmallIntegerField(default=0, db_index=True)
+    engagement_score_reasons = models.JSONField(default=list, blank=True)
+    scores_computed_at = models.DateTimeField(null=True, blank=True)
+
     outbound_eligible = models.BooleanField(default=False)
     outbound_ineligible_reason = models.CharField(max_length=255, blank=True)
     predictneed_excluded = models.BooleanField(default=False)

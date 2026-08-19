@@ -338,9 +338,35 @@ class ProspectSignal(models.Model):
         ("risk", "Risque"),
     ]
 
+    # Mission 6 — rôle du signal dans les trois scores (FIT/INTENT/ENGAGEMENT).
+    # Distinct de `category` (qui décrit la NATURE technique du signal, ex.
+    # "analytics") : `signal_group` décrit son RÔLE dans le scoring. Un signal
+    # "analytics" (outil détecté) est un indice de FIT/maturité, jamais d'INTENT
+    # à lui seul — voir services/intent_scoring.py.
+    SIGNAL_GROUPS = [
+        ("fit", "Fit"),
+        ("intent", "Intent"),
+        ("engagement", "Engagement"),
+        ("risk", "Risque"),
+    ]
+    # D'où vient l'observation — distinct de `source_url` (l'URL précise).
+    SOURCE_KINDS = [
+        ("registry", "Registre officiel"),
+        ("website", "Site web"),
+        ("technology", "Technologie détectée"),
+        ("open_web", "Web ouvert"),
+        ("social", "Réseau social"),
+        ("linkedin", "LinkedIn"),
+        ("campaign", "Campagne ProspectPilot"),
+        ("predictneed", "PredictNeed IA"),
+        ("manual", "Ajout manuel"),
+    ]
+
     prospect = models.ForeignKey(Prospect, related_name="signals", on_delete=models.CASCADE)
     signal_type = models.CharField(max_length=80, db_index=True)
     category = models.CharField(max_length=30, choices=CATEGORIES, default="acquisition")
+    signal_group = models.CharField(max_length=20, choices=SIGNAL_GROUPS, default="fit")
+    source_kind = models.CharField(max_length=20, choices=SOURCE_KINDS, blank=True)
     label = models.CharField(max_length=255)
     value = models.CharField(max_length=255, blank=True)
     source_url = models.URLField(max_length=1000, blank=True)
@@ -348,11 +374,27 @@ class ProspectSignal(models.Model):
     confidence = models.PositiveSmallIntegerField(default=70)
     score_impact = models.SmallIntegerField(default=0)
     positive = models.BooleanField(default=True)
+    # `observed_at` = quand l'événement/état réel a eu lieu (peut être connu avec
+    # retard) ; `detected_at` = quand ProspectPilot a créé cette ligne. Les deux
+    # peuvent différer ; la fraîcheur (services/signal_freshness.py) se base sur
+    # `observed_at`, jamais sur `detected_at`.
+    observed_at = models.DateTimeField(null=True, blank=True)
     detected_at = models.DateTimeField(auto_now_add=True)
     last_checked_at = models.DateTimeField(null=True, blank=True)
+    # Identité de déduplication (mission 6, section 3) : deux détections avec la
+    # même empreinte sont le même signal (on rafraîchit `last_checked_at`) ; une
+    # empreinte différente est un événement réellement distinct (nouvelle ligne),
+    # même si `signal_type` est identique. Voir services/signals.py::signal_fingerprint.
+    fingerprint = models.CharField(max_length=64, blank=True)
 
     class Meta:
         ordering = ["-positive", "-score_impact"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["prospect", "signal_type", "source_kind", "fingerprint"],
+                name="unique_signal_identity_per_prospect",
+            )
+        ]
 
     def __str__(self):
         return f"{self.label} ({self.prospect})"
