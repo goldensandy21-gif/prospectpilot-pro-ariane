@@ -401,6 +401,44 @@ class ProspectSignal(models.Model):
 
 
 # ---------------------------------------------------------------------------
+# Mission 6, section 15 — Alertes
+# ---------------------------------------------------------------------------
+
+class Alert(models.Model):
+    """Nouveau modèle justifié : aucun modèle existant ne représente une
+    NOTIFICATION destinée à l'utilisateur commercial — ProspectSignal décrit
+    un fait détecté CHEZ le prospect, EngagementEvent une action DU
+    prospect ; Alert est la couche "quelque chose mérite l'attention de
+    l'utilisateur maintenant", une entité métier distincte des deux."""
+    ALERT_TYPES = [
+        ("intent_threshold_crossed", "Seuil d'intention franchi"),
+        ("strong_signal", "Signal fort détecté"),
+        ("new_engagement", "Nouvel engagement PredictNeed"),
+        ("reactivated", "Prospect réactivé après inactivité"),
+    ]
+
+    prospect = models.ForeignKey(Prospect, related_name="alerts", on_delete=models.CASCADE)
+    alert_type = models.CharField(max_length=30, choices=ALERT_TYPES, db_index=True)
+    message = models.CharField(max_length=255)
+    # Dédoublonnage obligatoire (mission 6, section 15) : la même paire
+    # (prospect, alert_type, dedup_key) ne peut exister qu'une fois. Chaque
+    # type d'alerte choisit sa clé pour qu'un événement réel donne EXACTEMENT
+    # une alerte — voir services/alerts.py pour le détail par type.
+    dedup_key = models.CharField(max_length=120)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["prospect", "alert_type", "dedup_key"], name="unique_alert_dedup"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_alert_type_display()} - {self.prospect}"
+
+
+# ---------------------------------------------------------------------------
 # ETAPE 11 — Concurrents
 # ---------------------------------------------------------------------------
 

@@ -66,6 +66,12 @@ def process_predictneed_event(payload):
         idempotency_key=idempotency_key or None, occurred_at=occurred_at,
     )
 
+    if prospect:
+        # Mission 6, section 15 : alerte sur un nouvel engagement PredictNeed
+        # réel, jamais un événement synthétique.
+        from .alerts import check_engagement_alert
+        check_engagement_alert(prospect, engagement)
+
     response = {"status": "ok", "engagement_event_id": engagement.pk}
 
     if campaign_prospect:

@@ -273,17 +273,46 @@ intention d'"analyse comportementale" (qui serait le signal, différent,
 `campaign_sequencing.py::_build_linkedin_message()` passe par cette même
 fonction — pas de personnalisation ad hoc en dehors du dictionnaire fermé.
 
+## Alertes (section 15)
+
+Nouveau modèle `Alert` (models/acquisition.py) — justifié : aucun modèle
+existant ne représente une NOTIFICATION pour l'utilisateur commercial
+(`ProspectSignal` décrit un fait chez le prospect, `EngagementEvent` une
+action du prospect ; `Alert` est la couche "ceci mérite l'attention
+maintenant", une entité distincte des deux). Migration 0011 : simple
+`CREATE TABLE`, aucune table existante modifiée — vérifiée sur Postgres 18
+réel.
+
+`services/alerts.py` — trois points d'entrée, câblés aux points de
+persistance canoniques (jamais un job périodique qui rescanne tout et
+spamme) :
+- `check_signal_alerts()`, appelé depuis `persist_signals()` (le seul point
+  d'écriture de `ProspectSignal`, quel que soit le pipeline d'origine) :
+  alerte sur un signal `intent`/`engagement` réellement NOUVEAU et fort
+  (impact ≥ 7), et sur une réactivation (≥ 30 jours sans signal ni
+  engagement, basé sur `observed_at`, jamais `detected_at`).
+- `check_intent_threshold_alert()`, appelé depuis
+  `recompute_acquisition_scores()` : alerte uniquement sur une MONTÉE vers
+  un niveau IN MARKET actionnable ("probable"/"forte") — jamais sur une
+  baisse, jamais si le niveau ne change pas.
+- `check_engagement_alert()`, appelé depuis `predictneed_webhook.py` après
+  chaque nouvel `EngagementEvent` réel.
+
+Dédoublonnage garanti par une contrainte unique
+`(prospect, alert_type, dedup_key)` — `get_or_create` ne peut jamais créer
+deux fois la même alerte pour le même événement.
+
 ## État d'avancement de la Mission 6
 
-Réalisé et testé (246 tests, migrations 0007-0010 vérifiées sur Postgres 18
+Réalisé et testé (264 tests, migrations 0007-0011 vérifiées sur Postgres 18
 réel) : consolidation ProspectSignal (dédoublonnage par empreinte), fraîcheur
 canonique, scores INTENT/ENGAGEMENT, statut IN MARKET NOW, Next Best Action
 structurée, orchestration LinkedIn (provider manuel/mock), timeline étendue,
 architecture SignalCollector, séquences multicanal Campaign/CampaignProspect,
-garde-fous de personnalisation des messages, tests de non-régression et de
-protection des données.
+garde-fous de personnalisation des messages, alertes, tests de non-régression
+et de protection des données.
 
-Restant (non commencé à ce stade) : alertes Celery (section 15), tableaux
-d'analytics (section 17), mise à jour des templates Prospects/fiche prospect
-(section 14), tests UX en navigateur et scénario métier bout-en-bout complet
-avec vérification visuelle (section 20).
+Restant (non commencé à ce stade) : tableaux d'analytics (section 17), mise
+à jour des templates Prospects/fiche prospect (section 14), tests UX en
+navigateur et scénario métier bout-en-bout complet avec vérification
+visuelle (section 20).

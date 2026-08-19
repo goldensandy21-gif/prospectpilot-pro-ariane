@@ -22,6 +22,7 @@ from .core import (
     Suppression,
 )
 from .acquisition import (
+    Alert,
     AgentBrief,
     Campaign,
     CampaignProspect,
@@ -65,6 +66,7 @@ __all__ = [
     "SearchDecision",
     "SiteAuditSummary",
     "Suppression",
+    "Alert",
     "AgentBrief",
     "Campaign",
     "CampaignProspect",

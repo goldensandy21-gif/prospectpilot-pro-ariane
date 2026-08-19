@@ -217,7 +217,15 @@ def persist_signals(prospect, signal_objects):
                 "observed_at": signal.observed_at or now,
             },
         )
+        # Attribut transitoire (jamais persisté) : distingue un signal
+        # réellement nouveau d'un simple rafraîchissement, pour les alertes
+        # (mission 6, section 15) — voir services/alerts.py::check_signal_alerts.
+        obj._was_created = created
         saved.append(obj)
+
+    from .alerts import check_signal_alerts
+    check_signal_alerts(prospect, saved)
+
     return saved
 
 
