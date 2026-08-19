@@ -1,0 +1,145 @@
+# Architecture du moteur d'acquisition ProspectPilot
+
+Ce document explique comment ProspectPilot trouve, qualifie, priorise et contacte des
+entreprises pour le compte de PredictNeed IA — et où se trouve chaque brique dans le
+code. Il est écrit pour être compréhensible sans lire le code.
+
+Écrit avant la Mission 6 (Signal Intelligence + Intent + LinkedIn), pour servir de
+carte avant toute nouvelle construction — règle absolue de la mission : **ne jamais
+créer une deuxième version de quelque chose qui existe déjà**.
+
+---
+
+## 1. Le parcours en une phrase
+
+```
+Recherche → Qualification → Signaux → Scoring → Prospects → Campagnes → Engagement → Conversion
+```
+
+- **Recherche** : on interroge le registre officiel des entreprises (API Recherche
+  d'Entreprises) selon des critères (secteur, taille, zone).
+- **Qualification** : on élimine tout de suite ce qui ne correspond pas à l'ICP
+  (le profil-cible du produit).
+- **Signaux** : pour les entreprises qui restent, on regarde leur site web, leurs
+  outils techniques, leurs coordonnées publiques — et on note ce qu'on observe comme
+  autant de "signaux" horodatés et sourcés.
+- **Scoring** : les signaux sont combinés en scores (aujourd'hui : un score global
+  PredictNeed 0-100 + un grade A/B/C/D).
+- **Prospects** : l'utilisatrice choisit explicitement quelles entreprises rejoignent
+  la vraie liste de travail (rien n'y entre automatiquement).
+- **Campagnes** : on regroupe des Prospects sélectionnés dans une campagne, avec un
+  produit, un ICP et une séquence d'e-mails.
+- **Engagement** : chaque interaction (clic, visite PredictNeed, simulateur,
+  inscription...) est enregistrée.
+- **Conversion** : quand PredictNeed confirme un client payant, le revenu (MRR) est
+  attribué à la campagne, au signal, à l'e-mail d'origine.
+
+---
+
+## 2. Cartographie détaillée (avant Mission 6)
+
+Légende : **EXISTE** / **EXISTE PARTIELLEMENT** / **ABSENTE** / **LEGACY À NE PAS UTILISER**
+
+| Fonctionnalité | État | Où | Détail |
+|---|---|---|---|
+| Modèle de signal | **EXISTE** | `prospects/models/acquisition.py::ProspectSignal` | `signal_type`, `category`, `label`, `value`, `source_url`, `evidence`, `confidence`, `score_impact`, `positive`, `detected_at`, `last_checked_at`. C'est la table canonique — Mission 6 doit l'étendre, jamais la dupliquer. |
+| Extraction de signaux | **EXISTE PARTIELLEMENT** | `prospects/services/signals.py` | `build_signals_from_technologies()` et `build_signals_from_quick_scan()` produisent des signaux à partir des technologies détectées et du quick scan. Couvre analytics/publicité/CRM/conversion. Ne couvre pas encore : changements d'entreprise, activité LinkedIn/réseaux sociaux, réutilisation d'EngagementEvent comme source de signal. |
+| Persistance des signaux | **EXISTE, mais dédup insuffisante** | `signals.py::persist_signals()` | `ProspectSignal.objects.update_or_create(prospect, signal_type)` — un signal du même **type** écrase toujours le précédent, même si c'est un événement réellement différent dans le temps (ex. recrutement Growth en janvier vs campagne Growth en août). Section 3 de la mission : corriger. |
+| Provenance / preuves | **EXISTE** | `ProspectSignal.source_url`, `.evidence`, `.confidence` ; `ProspectEvidence` (preuves génériques multi-champs) | Chaque signal a déjà une preuve et une URL source. Rien à dupliquer. |
+| Scoring | **EXISTE** | `prospects/services/predictneed_scoring.py::score_prospect()` | Combine `icp_fit_score`, `need_score`, `acquisition_maturity_score`, `contactability_score`, `timing_score` (pondérés par `ICPProfile.weights`) en `predictneed_acquisition_score` + `predictneed_grade` (A/B/C/D). **`need_score` et `timing_score` sont déjà des embryons d'INTENT** — ils lisent `ProspectSignal.category in ["conversion","growth"]` et `category="timing"`. Mission 6 doit les faire évoluer vers un `intent_score` explicite et pondéré par fraîcheur, pas les dupliquer. |
+| Fraîcheur / timing des signaux | **ABSENTE** | — | Aucune notion de poids qui diminue avec l'âge du signal. `timing_score` existe comme sous-score mais ne dépend pas de la date. À construire (section 4/mission). |
+| Engagement | **EXISTE** | `EngagementEvent` + `prospects/services/tracking.py`, `campaign_click` (vue) | Déjà un modèle dédié, déjà utilisé pour les clics de campagne et les événements PredictNeed (webhook HMAC). Rien à recréer — juste à agréger en `engagement_score`. |
+| Timeline commerciale | **EXISTE** | `prospects/services/commercial_timeline.py::build_prospect_timeline()` | Construit une liste chronologique à partir de `Prospect.created_at`, `SearchCandidate`, `CrawlRun`, `PublicEmail`, `EmailSend`, `EngagementEvent`, `ConversionEvent`. Une seule fonction, un seul format — à étendre (signal détecté, LinkedIn), jamais dupliquer. |
+| Recommandation commerciale (next best action) | **EXISTE PARTIELLEMENT** | `AgentBrief.next_best_action` (champ), calculé dans `prospects/services/agent_brief.py::generate_agent_brief()` | Aujourd'hui : simple table `{grade: phrase libre}` (`"A": "Contacter avec un e-mail personnalisé..."`). Pas de code d'action structuré (WAIT/LINKEDIN_CONNECT/...), pas de raison/confiance/signal déclencheur explicites. Le champ et l'endroit où l'écrire existent déjà — à faire évoluer, pas à dupliquer. |
+| URL LinkedIn entreprise | **EXISTE** | `PublicSocialLink(platform="linkedin")` | Déjà détecté automatiquement lors du quick scan (`platform_for_url` dans `crawler.py` reconnaît linkedin.com). Base de la Mission 6 pour "entreprise LinkedIn". |
+| URL LinkedIn décideur | **EXISTE** | `ContactPerson.profile_url` | Champ générique déjà présent, déjà prévu pour ça. Pas de nouveau modèle nécessaire. |
+| Contacts / décideurs | **EXISTE** | `ContactPerson` | `full_name`, `job_title`, `email`, `phone`, `profile_url`, `confidence_score`, `verification_status`. Utilisé aujourd'hui surtout pour l'e-mail nominatif ; peu peuplé en volume réel (1 seul enregistrement en production à ce jour). |
+| Journal de contact LinkedIn | **EXISTE PARTIELLEMENT** | `ContactLog(channel="linkedin", outcome=...)` | Le choix `channel="linkedin"` existe déjà dans le modèle, mais rien ne l'utilise encore. Pas de machine à états (invitation préparée/envoyée/acceptée/refusée, message préparé/envoyé). À étendre pour la Mission 6, jamais recréer un journal parallèle. |
+| Campagnes | **EXISTE, mono-canal e-mail uniquement** | `Campaign`, `CampaignProspect`, `EmailSequence/EmailStep/EmailVariant`, `prospects/services/campaign_sending.py` | Aucune notion de canal (email vs LinkedIn), aucune notion d'attente/condition/stop autre que le statut. Mission 6 doit étendre `Campaign`/`CampaignProspect`, jamais créer un deuxième moteur de campagne. |
+| Réponses | **EXISTE (léger)** | `response_board` (vue), `ContactLog.outcome="replied"` | Tableau de bord simple des réponses manuelles. Pas de détection automatique de réponse LinkedIn (normal : aucune intégration LinkedIn encore branchée). |
+| Conversion | **EXISTE** | `ConversionEvent` | Alimenté par le webhook HMAC PredictNeed → ProspectPilot (signup/paying/cancelled). Rien à changer structurellement. |
+| Attribution de revenu | **EXISTE** | `RevenueAttribution` | Un-à-un avec `ConversionEvent`, capture MRR/valeur d'abonnement, ICP, séquence, variant e-mail. Déjà prêt pour mesurer la performance par signal si on y ajoute un lien vers le signal déclencheur (Mission 6, section 17). |
+| Tâches Celery / planification | **EXISTE** | `prospects/tasks.py`, `django_celery_beat` (DatabaseScheduler) | Infrastructure de tâches planifiées déjà en place et déjà utilisée (`scheduled_refresh_top_prospects`, `run_scheduled_search_preset_task`). Réutilisable telle quelle pour les alertes (section 15) — pas besoin d'un nouveau système de planification. |
+| Alertes | **ABSENTE** | — | Aucun modèle, aucune notification. À construire en s'appuyant sur Celery Beat existant. |
+| Dashboard | **EXISTE** | `prospects/views.py::dashboard`, `templates/prospects/dashboard.html` | Cockpit déjà basé sur les champs PredictNeed (`predictneed_acquisition_score`, `predictneed_grade`, `predictneed_stage`, `outbound_eligible`) depuis la Mission 5. Prêt à recevoir FIT/INTENT/ENGAGEMENT sans refonte. |
+| Liste Prospects | **EXISTE** | `prospects/views.py::prospect_list`, `templates/prospects/list.html` | Filtres rapides déjà en place (grade, avec e-mail, statut). Prêt à recevoir de nouvelles colonnes/filtres sans refonte. |
+| Fiche Prospect | **EXISTE** | `prospects/views.py::prospect_detail`, `templates/prospects/detail.html` | Section "Pourquoi prospecter cette entreprise ?" déjà présente avec score, sous-scores, signaux, AgentBrief. Prête à accueillir FIT/INTENT/ENGAGEMENT et la timeline étendue. |
+| Moteur e-mail legacy ProspectPilot | **LEGACY À NE PAS UTILISER** | `prospects/services/emailing.py`, `prospects/views.py::email_preview/email_send` | Conservé uniquement pour compatibilité historique (Mission 5, partie 2) — déplacé en bas de la fiche Prospect sous "Outils hérités". Ne jamais y raccrocher une nouvelle fonctionnalité. |
+| Score legacy `priority_score` | **LEGACY À NE PAS UTILISER** | `Prospect.priority_score` | Remplacé par `predictneed_acquisition_score` comme système principal depuis la Mission 5. Toujours en base pour compatibilité, ne plus l'utiliser comme référence. |
+
+---
+
+## 3. Décisions de conception pour la Mission 6 (pas de nouvelle couche)
+
+- **FIT** = expose clairement `Prospect.icp_fit_score` (déjà calculé par
+  `compute_icp_fit_score()`), pas un nouveau champ.
+- **INTENT** = nouveau champ `Prospect.intent_score`, calculé par un nouveau service
+  canonique (`services/intent_scoring.py`) qui lit les `ProspectSignal` du groupe
+  `intent`, pondérés par fraîcheur — remplace la logique implicite de `need_score`/
+  `timing_score` pour ce rôle précis, sans supprimer ces deux champs (compatibilité
+  du score PredictNeed existant).
+- **ENGAGEMENT** = nouveau champ `Prospect.engagement_score`, calculé à partir des
+  `EngagementEvent` existants — aucun nouveau modèle d'événement.
+- **PRIORITÉ** = `Prospect.predictneed_acquisition_score` reste le score canonique
+  affiché comme "Priorité" — pas de cinquième score concurrent. Sa formule peut
+  évoluer pour intégrer intent_score/engagement_score dans une mission ultérieure ;
+  la Mission 6 ne la modifie pas pour limiter le risque de régression sur les scores
+  déjà en production.
+- **Next Best Action** = extension de `agent_brief.py`, toujours écrit dans
+  `AgentBrief.next_best_action`, avec un nouveau service qui retourne un code
+  structuré (WAIT/WATCH/LINKEDIN_CONNECT/...) + raison + confiance + signal
+  déclencheur, au lieu d'une simple phrase par grade.
+- **LinkedIn** = aucun nouveau modèle de contact. `PublicSocialLink` porte
+  l'entreprise, `ContactPerson.profile_url` porte le décideur, `ContactLog` est
+  étendu (nouveaux `outcome` LinkedIn) pour journaliser l'orchestration.
+- **Multicanal** = `CampaignProspect` est étendu (pas un deuxième `Campaign`) avec
+  l'état de séquence courant.
+
+---
+
+## 4. Comment comprendre ProspectPilot en 5 minutes
+
+```
+   TROUVER
+      |
+      v
+ QUALIFIER / FIT        <- ICP, secteur, taille, localisation, technologies
+      |
+      v
+ DETECTER LES SIGNAUX    <- site, technologies, réseaux sociaux, engagement
+      |
+      v
+    INTENT               <- signaux récents pertinents, pondérés par fraîcheur
+      |
+      v
+   ENGAGEMENT             <- clics, visites PredictNeed, simulateur, inscription
+      |
+      v
+   PRIORISER              <- score global + grade, "next best action"
+      |
+      v
+ EMAIL / LINKEDIN         <- campagne multicanal, une action à la fois
+      |
+      v
+  PREDICTNEED             <- le prospect utilise réellement le produit
+      |
+      v
+ CLIENT / MRR             <- conversion + revenu attribué
+```
+
+**Où trouver chaque chose dans l'interface :**
+- **Dashboard** : vue d'ensemble — combien de prospects retenus, prêts à contacter,
+  clients, MRR.
+- **Trouver des prospects** : lancer une recherche (registre officiel) ou une
+  recherche manuelle.
+- **Prospects** : la vraie liste de travail — uniquement les entreprises
+  explicitement sélectionnées, avec FIT/INTENT/ENGAGEMENT/Priorité et l'action
+  recommandée.
+- **Campagnes** : regrouper des prospects sélectionnés et les faire avancer dans une
+  séquence (e-mail, bientôt LinkedIn).
+- **Résultats** : ce qui a été gagné — clics, inscriptions, clients, revenu, par
+  campagne/ICP/grade.
+- **Réglages** : identité e-mail, Search Console, import.
+
+Ce document sera complété au fil de la Mission 6 avec les formules FIT/INTENT/
+ENGAGEMENT et le détail LinkedIn/multicanal une fois implémentés.
