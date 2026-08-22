@@ -4,42 +4,59 @@
 <title>{% block title %}ProspectPilot Pro{% endblock %}</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" rel="stylesheet">
-<link href="{% static 'css/app.css' %}?v=20260721-flow1" rel="stylesheet">
+<link href="{% static 'css/app.css' %}?v=20260822-mission7a" rel="stylesheet">
 </head><body>
 {% if user.is_authenticated %}
-<header class="app-header"><nav class="navbar app-navbar"><div class="container-fluid px-lg-4">
-<a class="navbar-brand" href="{% url 'dashboard' %}"><span>PP</span><strong>ProspectPilot <em>PRO</em></strong></a>
-<div class="app-header-actions">
-<form method="post" action="{% url 'logout' %}" class="app-logout-form">{% csrf_token %}<button class="btn btn-sm btn-outline-dark" type="submit" title="Quitter"><i class="bi bi-box-arrow-right"></i></button></form>
-<button class="navbar-toggler border-0" type="button" data-menu-toggle="main" aria-controls="menu" aria-label="Ouvrir le menu" aria-expanded="false"><i class="bi bi-list"></i></button>
-</div>
-<div class="app-menu" id="menu" tabindex="-1" aria-hidden="true"><div class="app-menu-header"><strong>ProspectPilot Pro</strong><button class="btn-close" type="button" data-menu-close aria-label="Fermer le menu"></button></div><div class="app-menu-body">
-<ul class="navbar-nav app-menu-links">
-<li><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
-<li class="app-menu-group">
-  <span class="app-menu-group-title">Trouver des prospects</span>
-  <ul>
-    <li><a class="nav-link" href="{% url 'acquisition_search' %}">Recherche intelligente</a></li>
-    <li><a class="nav-link" href="{% url 'company_search' %}">Recherche manuelle</a></li>
-    <li><a class="nav-link" href="{% url 'linkedin_board' %}">LinkedIn</a></li>
-  </ul>
-</li>
-<li><a class="nav-link" href="{% url 'prospect_list' %}">Prospects</a></li>
-<li><a class="nav-link" href="{% url 'campaign_list' %}">Campagnes</a></li>
-<li><a class="nav-link" href="{% url 'conversions_revenue' %}">Résultats</a></li>
-<li class="app-menu-group">
-  <span class="app-menu-group-title">Réglages</span>
-  <ul>
-    <li><a class="nav-link" href="{% url 'search_console_home' %}">Search Console</a></li>
-    <li><a class="nav-link" href="{% url 'email_settings' %}">Réglages e-mail</a></li>
-    <li><a class="nav-link" href="{% url 'prospect_import' %}">Import</a></li>
-  </ul>
-</li>
-</ul>
-</div></div></div></nav></header>
+{% url 'dashboard' as u_dashboard %}
+{% url 'acquisition_search' as u_acquisition_search %}
+{% url 'company_search' as u_company_search %}
+{% url 'linkedin_board' as u_linkedin_board %}
+{% url 'search_console_home' as u_search_console %}
+{% url 'email_settings' as u_email_settings %}
+{% url 'prospect_import' as u_prospect_import %}
+{% url 'prospect_list' as u_prospect_list %}
+{% url 'campaign_list' as u_campaign_list %}
+{% url 'conversions_revenue' as u_conversions_revenue %}
+<header class="app-header">
+  <nav class="navbar navbar-expand-lg app-navbar">
+    <div class="container-fluid px-lg-4">
+      <a class="navbar-brand" href="{% url 'dashboard' %}"><span>PP</span><strong>ProspectPilot <em>PRO</em></strong></a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#appNavbarContent" aria-controls="appNavbarContent" aria-expanded="false" aria-label="Ouvrir le menu">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="appNavbarContent">
+        <ul class="navbar-nav me-auto mb-2 mb-lg-0 align-items-lg-center gap-lg-1">
+          <li class="nav-item">
+            <a class="nav-link {% if request.path == u_dashboard or request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">Dashboard</a>
+          </li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle {% if request.path == u_acquisition_search or request.path == u_company_search or request.path == u_linkedin_board %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Trouver des prospects</a>
+            <ul class="dropdown-menu">
+              <li><a class="dropdown-item" href="{{ u_acquisition_search }}">Recherche intelligente</a></li>
+              <li><a class="dropdown-item" href="{{ u_company_search }}">Recherche manuelle</a></li>
+              <li><a class="dropdown-item" href="{{ u_linkedin_board }}">LinkedIn</a></li>
+            </ul>
+          </li>
+          <li class="nav-item"><a class="nav-link {% if request.path == u_prospect_list %}active{% endif %}" href="{{ u_prospect_list }}">Prospects</a></li>
+          <li class="nav-item"><a class="nav-link {% if request.path == u_campaign_list %}active{% endif %}" href="{{ u_campaign_list }}">Campagnes</a></li>
+          <li class="nav-item"><a class="nav-link {% if request.path == u_conversions_revenue %}active{% endif %}" href="{{ u_conversions_revenue }}">Résultats</a></li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle {% if request.path == u_search_console or request.path == u_email_settings or request.path == u_prospect_import %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Réglages</a>
+            <ul class="dropdown-menu dropdown-menu-lg-end">
+              <li><a class="dropdown-item" href="{{ u_search_console }}">Search Console</a></li>
+              <li><a class="dropdown-item" href="{{ u_email_settings }}">Réglages e-mail</a></li>
+              <li><a class="dropdown-item" href="{{ u_prospect_import }}">Import</a></li>
+            </ul>
+          </li>
+        </ul>
+        <form method="post" action="{% url 'logout' %}" class="app-logout-form">{% csrf_token %}<button class="btn btn-sm btn-outline-dark" type="submit" title="Quitter"><i class="bi bi-box-arrow-right"></i> <span class="d-lg-none">Se déconnecter</span></button></form>
+      </div>
+    </div>
+  </nav>
+</header>
 {% endif %}
 {% if messages %}<div class="container-fluid px-lg-4 pt-3">{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}</div>{% endif %}
 <main>{% block content %}{% endblock %}</main>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
-<script src="{% static 'js/app.js' %}?v=20260721-flow1"></script>
+<script src="{% static 'js/app.js' %}?v=20260822-mission7a"></script>
 </body></html>

@@ -87,7 +87,7 @@
     {% endif %}
     {% endif %}
 
-    <div class="cockpit-card mt-4" style="background:#f8f9fb;border:1px solid #e5e7eb;border-radius:12px;padding:1.25rem;">
+    <div class="cockpit-card cockpit-card-tint mt-4">
       <h3 class="h5 mb-3">Pourquoi contacter cette entreprise maintenant ?</h3>
       <div class="row g-3 mb-3">
         <div class="col-6 col-md-3">
@@ -462,9 +462,9 @@
       </div>
 
       <details class="panel email-prospect-panel mt-4">
-        <summary style="cursor:pointer;">
+        <summary class="legacy-tools-summary">
           <span class="eyebrow">OUTILS HÉRITÉS</span>
-          <h2 style="display:inline;font-size:1.1rem;">Ancien modèle ProspectPilot Pro</h2>
+          <h2 class="legacy-tools-title">Ancien modèle ProspectPilot Pro</h2>
         </summary>
         <p class="legal-note mt-2">Ce modèle fait la promotion de ProspectPilot Pro lui-même, pas de PredictNeed IA — conservé uniquement pour compatibilité historique, en dehors du workflow commercial principal. Pour contacter ce prospect, utilise « Préparer un e-mail PredictNeed » en haut de page.</p>
         {% if not prospect.public_email %}

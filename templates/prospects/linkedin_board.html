@@ -16,9 +16,9 @@
 </section>
 
 <section class="container-fluid px-lg-4 pb-5">
-  <div class="linkedin-board d-flex gap-3" style="overflow-x:auto">
+  <div class="linkedin-board">
     {% for column in columns %}
-      <div class="linkedin-column" style="min-width:260px;flex:1">
+      <div class="linkedin-column">
         <h2 class="h6">{{ column.label }} <span class="text-muted">({{ column.items|length }})</span></h2>
         <div class="d-flex flex-column gap-2">
           {% for entry in column.items %}
