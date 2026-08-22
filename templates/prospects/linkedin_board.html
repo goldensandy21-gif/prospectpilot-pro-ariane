@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}LinkedIn | ProspectPilot Pro{% endblock %}
+
+{% block content %}
+<section class="page-intro">
+  <div>
+    <span class="eyebrow">LINKEDIN</span>
+    <h1>Suivi LinkedIn</h1>
+    <p>Vue opérationnelle des entreprises sélectionnées pour la prospection ayant un profil LinkedIn connu — construite à partir de l'historique de contact existant, aucune automatisation de collecte LinkedIn.</p>
+  </div>
+  <div class="action-row">
+    <a class="btn btn-outline-dark" href="{% url 'prospect_list' %}?has_linkedin=1">Voir dans Prospects</a>
+    <a class="btn btn-primary-custom" href="{% url 'campaign_create' %}">Créer une campagne</a>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <div class="linkedin-board d-flex gap-3" style="overflow-x:auto">
+    {% for column in columns %}
+      <div class="linkedin-column" style="min-width:260px;flex:1">
+        <h2 class="h6">{{ column.label }} <span class="text-muted">({{ column.items|length }})</span></h2>
+        <div class="d-flex flex-column gap-2">
+          {% for entry in column.items %}
+            <div class="panel p-2">
+              <a href="{% url 'prospect_detail' entry.prospect.pk %}"><strong>{{ entry.prospect.name }}</strong></a>
+              <div class="small text-muted">FIT {{ entry.prospect.icp_fit_score }} · INTENT {{ entry.prospect.intent_score }} · ENGAGEMENT {{ entry.prospect.engagement_score }}</div>
+              {% if entry.last_log %}
+                <div class="small">{{ entry.last_log.get_outcome_display }} · {{ entry.last_log.contacted_at|date:"d/m/Y" }}</div>
+              {% endif %}
+              <div class="small"><span class="status-pill">{{ entry.nba.code }}</span></div>
+              <a class="small" href="{{ entry.profile_url }}" target="_blank">Profil LinkedIn <i class="bi bi-box-arrow-up-right"></i></a>
+            </div>
+          {% empty %}
+            <p class="text-muted small">Aucun prospect.</p>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

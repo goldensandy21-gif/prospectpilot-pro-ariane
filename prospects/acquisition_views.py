@@ -314,7 +314,12 @@ def campaign_create(request):
             campaign = form.save(commit=False)
             campaign.created_by = request.user
             campaign.status = "draft"
-            campaign.sequence = get_or_create_default_sequence(campaign.product, campaign.icp)
+            # Correctif d'audit (LinkedIn/Hunter.io) : ne remplace la
+            # séquence choisie que si le formulaire l'a laissée vide —
+            # avant ce correctif, toute sélection était systématiquement
+            # écrasée par la séquence e-mail par défaut.
+            if not campaign.sequence_id:
+                campaign.sequence = get_or_create_default_sequence(campaign.product, campaign.icp)
             campaign.save()
             for prospect in Prospect.objects.filter(pk__in=selected_ids):
                 brief = prospect.agent_briefs.order_by("-generated_at").first()

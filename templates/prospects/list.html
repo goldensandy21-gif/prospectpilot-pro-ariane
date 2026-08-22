@@ -49,21 +49,23 @@
     {% endfor %}
   </div>
 
-  <form id="prospects-form" class="mt-4">
+  <form id="prospects-form" class="mt-4" method="post" action="{% url 'prospect_bulk_enrich' %}">
+    {% csrf_token %}
     <div class="table-responsive">
       <table class="table align-middle">
         <thead>
           <tr>
             <th><input type="checkbox" id="select-all-prospects"></th>
-            <th>Entreprise</th><th>FIT</th><th>INTENT</th><th>ENGAGEMENT</th><th>Priorité</th>
+            <th>Entreprise</th><th>Décideur</th><th>FIT</th><th>INTENT</th><th>ENGAGEMENT</th><th>Priorité</th>
             <th>Dernier signal</th><th>Âge</th><th>Email</th><th>LinkedIn</th><th>Action recommandée</th><th></th>
           </tr>
         </thead>
         <tbody>
           {% for p in prospects %}
             <tr>
-              <td><input type="checkbox" class="prospect-checkbox" value="{{ p.pk }}"></td>
+              <td><input type="checkbox" name="selected" class="prospect-checkbox" value="{{ p.pk }}"></td>
               <td>{{ p.name }}</td>
+              <td>{% if p.decision_maker %}<a href="{% url 'contact_person_detail' p.decision_maker.pk %}">{{ p.decision_maker.job_title|default:p.decision_maker.full_name }}</a>{% else %}—{% endif %}</td>
               <td>{{ p.icp_fit_score }}</td>
               <td>{{ p.intent_score }}</td>
               <td>{{ p.engagement_score }}</td>
@@ -76,13 +78,14 @@
               <td><a href="{% url 'prospect_detail' p.pk %}">Ouvrir <i class="bi bi-arrow-up-right"></i></a></td>
             </tr>
           {% empty %}
-            <tr><td colspan="12">Aucun prospect pour ce filtre. Va dans « Trouver des prospects » pour en sélectionner.</td></tr>
+            <tr><td colspan="13">Aucun prospect pour ce filtre. Va dans « Trouver des prospects » pour en sélectionner.</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
     <div class="action-row">
       <label class="d-flex align-items-center gap-2"><input type="checkbox" id="select-all-prospects-bottom"> Tout sélectionner</label>
+      <button type="submit" class="btn btn-outline-dark">Enrichir la sélection (multi-sources)</button>
       <a id="create-campaign-link" class="btn btn-primary-custom" href="{% url 'campaign_create' %}">Créer une campagne</a>
     </div>
   </form>

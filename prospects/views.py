@@ -14,7 +14,7 @@ from django.utils import timezone
 
 from .forms import CompanySearchForm, ProspectForm, ContactLogForm, EmailComposeForm, RejectCompanyForm, ProspectImportForm
 from .models import (
-    Prospect, ContactLog, Suppression, SearchConsoleConnection,
+    Prospect, ContactLog, ContactPerson, Suppression, SearchConsoleConnection,
     SearchConsoleMetric, Report, SearchDecision, EmailTemplate,
     PublicEmail, PublicPhone, PublicContactForm, PublicSocialLink,
     EmailSend,
@@ -164,6 +164,7 @@ def prospect_list(request):
         p.last_signal = last_signal
         p.last_signal_age_days = signal_age_days(last_signal.observed_at or last_signal.detected_at) if last_signal else None
         p.has_linkedin_contact = bool(linkedin_profile_url(p))
+        p.decision_maker = p.contact_people.filter(is_active=True).order_by("-confidence_score").first()
         p.nba = compute_next_best_action(p)
 
     nba_filter = request.GET.get("nba", "").strip()
@@ -179,6 +180,117 @@ def prospect_list(request):
             "filter_options": filter_options,
             "active_filter": request.GET.get("filter", "all"),
             "nba_codes": NBA_CODES,
+        },
+    )
+
+
+@login_required
+def prospect_bulk_enrich(request):
+    """Enrichissement multi-sources en masse depuis la sélection de la liste
+    Prospects — réutilise enrich_prospect_task (aucune nouvelle logique
+    d'enrichissement, aucun contournement de la sélection existante)."""
+    if request.method != "POST":
+        return redirect("prospect_list")
+    selected_ids = request.POST.getlist("selected")
+    prospects = Prospect.objects.filter(pk__in=selected_ids, selected_for_prospecting=True)
+    for prospect in prospects:
+        enrich_prospect_task.delay(prospect.pk, None, request.user.pk)
+    count = prospects.count()
+    if count:
+        messages.success(request, f"Enrichissement multi-sources lancé pour {count} prospect(s).")
+    else:
+        messages.error(request, "Sélectionne au moins un prospect avant de lancer l'enrichissement.")
+    return redirect("prospect_list")
+
+
+LINKEDIN_BUCKETS = [
+    ("a_prospecter", "À prospecter"),
+    ("preparees", "Préparées"),
+    ("envoyees", "Envoyées"),
+    ("acceptees", "Acceptées"),
+    ("a_relancer", "À relancer"),
+    ("reponses", "Réponses"),
+    ("echecs", "Échecs"),
+]
+# Au-delà de ce délai sans relance, une invitation acceptée sans message
+# envoyé bascule de "Acceptées" vers "À relancer" (même logique de
+# fraîcheur que le reste de Mission 6 : on part d'un log réel, jamais d'une
+# estimation).
+LINKEDIN_STALE_ACCEPTANCE_DAYS = 5
+
+
+@login_required
+def linkedin_board(request):
+    """Vue opérationnelle LinkedIn (inspirée de Hunter.io) : reconstruite
+    entièrement à partir de ContactPerson/ContactLog existants — aucun
+    nouveau modèle, aucune automatisation de scraping LinkedIn."""
+    from .services.linkedin_orchestration import linkedin_profile_url
+    from .services.next_best_action import compute_next_best_action
+
+    prospects = (
+        Prospect.objects.filter(selected_for_prospecting=True)
+        .prefetch_related("contact_people", "contact_logs")
+    )
+    buckets = {key: [] for key, _ in LINKEDIN_BUCKETS}
+    now = timezone.now()
+
+    for prospect in prospects:
+        profile_url = linkedin_profile_url(prospect)
+        if not profile_url:
+            continue
+        last_log = max(
+            (log for log in prospect.contact_logs.all() if log.channel == "linkedin"),
+            key=lambda log: log.contacted_at,
+            default=None,
+        )
+        entry = {"prospect": prospect, "profile_url": profile_url, "last_log": last_log, "nba": compute_next_best_action(prospect)}
+
+        if last_log is None:
+            bucket = "a_prospecter"
+        elif last_log.outcome in ("invitation_prepared", "message_prepared"):
+            bucket = "preparees"
+        elif last_log.outcome in ("invitation_sent", "sent"):
+            bucket = "envoyees"
+        elif last_log.outcome in ("invitation_failed", "message_failed", "invitation_declined"):
+            bucket = "echecs"
+        elif last_log.outcome in ("replied", "meeting", "proposal", "won"):
+            bucket = "reponses"
+        elif last_log.outcome == "invitation_accepted":
+            stale = (now - last_log.updated_at).days >= LINKEDIN_STALE_ACCEPTANCE_DAYS
+            bucket = "a_relancer" if stale else "acceptees"
+        else:
+            bucket = "a_prospecter"
+
+        buckets[bucket].append(entry)
+
+    columns = [{"key": key, "label": label, "items": buckets[key]} for key, label in LINKEDIN_BUCKETS]
+    return render(
+        request,
+        "prospects/linkedin_board.html",
+        {"columns": columns, "buckets": buckets},
+    )
+
+
+@login_required
+def contact_person_detail(request, pk):
+    """Fiche personne (« People » côté Hunter.io) : décideur détecté chez un
+    prospect, avec le contexte FIT/INTENT/ENGAGEMENT et la Next Best Action
+    de son entreprise (ProspectPilot ne score que l'entreprise, cohérent
+    avec l'existant PredictNeed)."""
+    from .services.next_best_action import compute_next_best_action
+
+    contact = get_object_or_404(ContactPerson, pk=pk)
+    prospect = contact.prospect
+    linkedin_logs = prospect.contact_logs.filter(channel="linkedin").order_by("-contacted_at")
+    return render(
+        request,
+        "prospects/contact_person_detail.html",
+        {
+            "contact": contact,
+            "prospect": prospect,
+            "nba": compute_next_best_action(prospect),
+            "linkedin_logs": linkedin_logs,
+            "campaign_prospects": prospect.campaign_memberships.select_related("campaign").order_by("-selected_at"),
         },
     )
 

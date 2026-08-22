@@ -264,7 +264,7 @@
         <h2>Personnes détectées</h2>
         <div class="table-responsive">
           <table class="table small">
-            <thead><tr><th>Nom</th><th>Poste</th><th>Email</th><th>Profil</th><th>Confiance</th></tr></thead>
+            <thead><tr><th>Nom</th><th>Poste</th><th>Email</th><th>Profil</th><th>Confiance</th><th></th></tr></thead>
             <tbody>
               {% for person in contact_people %}
                 <tr>
@@ -273,9 +273,10 @@
                   <td>{{ person.email|default:"—" }}</td>
                   <td>{% if person.profile_url %}<a href="{{ person.profile_url }}" target="_blank">profil</a>{% else %}—{% endif %}</td>
                   <td>{{ person.confidence_score }}/100</td>
+                  <td><a href="{% url 'contact_person_detail' person.pk %}">Fiche <i class="bi bi-arrow-up-right"></i></a></td>
                 </tr>
               {% empty %}
-                <tr><td colspan="5">Aucun contact nominatif public détecté.</td></tr>
+                <tr><td colspan="6">Aucun contact nominatif public détecté.</td></tr>
               {% endfor %}
             </tbody>
           </table>

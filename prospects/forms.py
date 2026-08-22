@@ -122,7 +122,7 @@ class AcquisitionSearchForm(forms.Form):
 class CampaignCreateForm(forms.ModelForm):
     class Meta:
         model = Campaign
-        fields = ["name", "product", "icp", "objective", "score_threshold", "daily_send_limit", "total_limit", "start_date", "end_date"]
+        fields = ["name", "product", "icp", "sequence", "objective", "score_threshold", "daily_send_limit", "total_limit", "start_date", "end_date"]
         widgets = {
             "start_date": forms.DateInput(attrs={"type": "date"}),
             "end_date": forms.DateInput(attrs={"type": "date"}),
@@ -130,6 +130,19 @@ class CampaignCreateForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Correctif d'audit (LinkedIn/Hunter.io) : jusqu'ici la séquence
+        # était TOUJOURS écrasée par get_or_create_default_sequence()
+        # (e-mail seul), rendant impossible une campagne LinkedIn ou
+        # multicanale même si une séquence existait déjà (créée dans
+        # l'administration, où EmailSequence/EmailStep/EmailVariant sont
+        # déjà enregistrés). Optionnel : laissé vide, le comportement par
+        # défaut (séquence e-mail auto-créée) est inchangé.
+        self.fields["sequence"].required = False
+        self.fields["sequence"].help_text = (
+            "Laisser vide pour la séquence e-mail par défaut. Choisir une séquence "
+            "existante (LinkedIn ou multicanale, créée dans l'administration) pour "
+            "en démarrer une différente."
+        )
         for field in self.fields.values():
             existing = field.widget.attrs.get("class", "")
             field.widget.attrs["class"] = (existing + " form-control").strip()

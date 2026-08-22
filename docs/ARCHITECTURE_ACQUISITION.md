@@ -546,3 +546,45 @@ supplémentaires, tous corrigés (23 nouveaux tests, 363 au total) :
 7. **Migrations depuis 0004** — rechaîne complète sur Postgres 18 réel,
    9 modèles + 3 ICPProfile (cas A/B/C), PKs identiques, `manage.py check`/
    `makemigrations --check` propres, tests de concurrence toujours verts.
+
+## Expérience LinkedIn type Hunter.io (round 3, partie UX)
+
+Aucun nouveau modèle : `Prospect` = Company, `ContactPerson` = People,
+`ContactPerson.profile_url` / `PublicSocialLink` = LinkedIn, `ContactLog`
+(channel="linkedin") = historique, `Campaign`/`CampaignProspect` =
+campagnes. L'automatisation LinkedIn reste strictement limitée à
+`LinkedInProvider` (mock/manuel) — rien de nouveau ne scrape ni n'automatise
+un navigateur.
+
+- **Sélection de séquence en campagne** — `campaign_create` écrasait
+  systématiquement `campaign.sequence` avec la séquence e-mail par défaut,
+  rendant impossible toute campagne LinkedIn ou multicanale même quand une
+  séquence existait déjà (créée dans l'administration, où
+  `EmailSequence`/`EmailStep`/`EmailVariant` sont déjà enregistrés).
+  Corrigé : le formulaire expose le champ `sequence` (optionnel), et la
+  valeur par défaut n'est appliquée que si l'utilisateur ne l'a pas choisie.
+- **Suivi LinkedIn** (`/linkedin/`, vue `linkedin_board`) — tableau
+  À prospecter | Préparées | Envoyées | Acceptées | À relancer | Réponses |
+  Échecs, reconstruit à chaque requête à partir de
+  `linkedin_profile_url(prospect)` (déjà utilisé par
+  `linkedin_orchestration.py`) et du dernier `ContactLog(channel="linkedin")`
+  de chaque entreprise sélectionnée pour la prospection. Une invitation
+  acceptée sans relance depuis `LINKEDIN_STALE_ACCEPTANCE_DAYS` (5 jours)
+  bascule automatiquement en "À relancer".
+- **Fiche personne** (`/contacts/<id>/`, vue `contact_person_detail`) —
+  entreprise, poste, LinkedIn, e-mail, confiance, FIT/INTENT/ENGAGEMENT et
+  Next Best Action de l'entreprise (ProspectPilot ne score que l'entreprise,
+  cohérent avec le reste de PredictNeed), campagnes en cours et historique
+  LinkedIn.
+- **Colonne Décideur** dans la liste Prospects, reliée à la fiche personne.
+- **Enrichissement en masse** (`/prospects/bulk-enrich/`) — réutilise
+  `enrich_prospect_task` sur la sélection existante de la liste Prospects ;
+  ne s'applique jamais à un prospect non `selected_for_prospecting`.
+- **Aucun menu de premier niveau ajouté** : "LinkedIn" a été inséré dans le
+  sous-menu existant "Trouver des prospects".
+- Les opérations de masse (campagne, enrichissement) passent toutes par les
+  chemins existants (`advance_campaign_prospect`, `enrich_prospect_task`) —
+  aucun contournement des limites, DNC, suppression, validation de
+  campagne ou Signal Intelligence.
+- 19 nouveaux tests (`test_mission6_linkedin_ux.py`), 382 au total. Aucune
+  migration nécessaire (`makemigrations --check` propre).
