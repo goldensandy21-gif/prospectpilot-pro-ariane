@@ -11,6 +11,7 @@
 {% url 'acquisition_search' as u_acquisition_search %}
 {% url 'company_search' as u_company_search %}
 {% url 'linkedin_board' as u_linkedin_board %}
+{% url 'web_intelligence_hub' as u_web_intelligence %}
 {% url 'search_console_home' as u_search_console %}
 {% url 'email_settings' as u_email_settings %}
 {% url 'prospect_import' as u_prospect_import %}
@@ -30,11 +31,12 @@
             <a class="nav-link {% if request.path == u_dashboard or request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">Dashboard</a>
           </li>
           <li class="nav-item dropdown">
-            <a class="nav-link dropdown-toggle {% if request.path == u_acquisition_search or request.path == u_company_search or request.path == u_linkedin_board %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Trouver des prospects</a>
+            <a class="nav-link dropdown-toggle {% if request.path == u_acquisition_search or request.path == u_company_search or request.path == u_linkedin_board or request.path == u_web_intelligence %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Trouver des prospects</a>
             <ul class="dropdown-menu">
               <li><a class="dropdown-item" href="{{ u_acquisition_search }}">Recherche intelligente</a></li>
               <li><a class="dropdown-item" href="{{ u_company_search }}">Recherche manuelle</a></li>
               <li><a class="dropdown-item" href="{{ u_linkedin_board }}">LinkedIn</a></li>
+              <li><a class="dropdown-item" href="{{ u_web_intelligence }}">Web Intelligence</a></li>
             </ul>
           </li>
           <li class="nav-item"><a class="nav-link {% if request.path == u_prospect_list %}active{% endif %}" href="{{ u_prospect_list }}">Prospects</a></li>

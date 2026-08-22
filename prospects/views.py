@@ -17,7 +17,7 @@ from .models import (
     Prospect, ContactLog, ContactPerson, Suppression, SearchConsoleConnection,
     SearchConsoleMetric, Report, SearchDecision, EmailTemplate,
     PublicEmail, PublicPhone, PublicContactForm, PublicSocialLink,
-    EmailSend,
+    EmailSend, ProspectEvidence,
 )
 
 from .services.company_search import (
@@ -201,6 +201,150 @@ def prospect_bulk_enrich(request):
     else:
         messages.error(request, "Sélectionne au moins un prospect avant de lancer l'enrichissement.")
     return redirect("prospect_list")
+
+
+@login_required
+def web_intelligence_hub(request):
+    """Mission 7F — « Trouver des prospects › Web Intelligence », façon
+    Hunter : Entreprises (tout le pool technique, pas seulement les
+    prospects déjà sélectionnés — voir prospect_list pour ceux-là),
+    Personnes (ContactPerson tous prospects confondus), Web Intelligence
+    (ProspectEvidence brute : source/type/date/confiance/statut). Aucune
+    nouvelle structure de données — uniquement des vues de lecture sur
+    l'existant."""
+    from .services.linkedin_orchestration import linkedin_profile_url
+    from .services.signal_freshness import signal_age_days
+
+    tab = request.GET.get("tab", "entreprises")
+    q = request.GET.get("q", "").strip()
+    context = {"tab": tab, "q": q}
+
+    if tab == "personnes":
+        people = ContactPerson.objects.select_related("prospect").filter(is_active=True)
+        if q:
+            people = people.filter(Q(full_name__icontains=q) | Q(prospect__name__icontains=q) | Q(job_title__icontains=q))
+        job_title = request.GET.get("job_title", "").strip()
+        if job_title:
+            people = people.filter(job_title__icontains=job_title)
+        if request.GET.get("has_email"):
+            people = people.exclude(email="")
+        if request.GET.get("has_linkedin"):
+            people = people.exclude(profile_url="")
+        confidence_min = request.GET.get("confidence_min", "").strip()
+        if confidence_min.isdigit():
+            people = people.filter(confidence_score__gte=int(confidence_min))
+        fit_min = request.GET.get("fit_min", "").strip()
+        if fit_min.isdigit():
+            people = people.filter(prospect__icp_fit_score__gte=int(fit_min))
+        intent_min = request.GET.get("intent_min", "").strip()
+        if intent_min.isdigit():
+            people = people.filter(prospect__intent_score__gte=int(intent_min))
+        context["people"] = people.select_related("prospect").order_by("-confidence_score")[:200]
+
+    elif tab == "data":
+        evidence = ProspectEvidence.objects.select_related("prospect", "source").filter(is_current=True)
+        if q:
+            evidence = evidence.filter(Q(prospect__name__icontains=q) | Q(field_name__icontains=q) | Q(value__icontains=q))
+        field_name = request.GET.get("field_name", "").strip()
+        if field_name:
+            evidence = evidence.filter(field_name=field_name)
+        status = request.GET.get("status", "").strip()
+        if status:
+            evidence = evidence.filter(verification_status=status)
+        context["evidence_items"] = evidence.order_by("-collected_at")[:200]
+        context["field_names"] = (
+            ProspectEvidence.objects.order_by("field_name").values_list("field_name", flat=True).distinct()
+        )
+        context["verification_choices"] = ProspectEvidence.VERIFICATION
+
+    else:
+        prospects = Prospect.objects.all()
+        if q:
+            prospects = prospects.filter(Q(name__icontains=q) | Q(sector__icontains=q) | Q(city__icontains=q) | Q(website__icontains=q))
+        if request.GET.get("only_new"):
+            prospects = prospects.filter(selected_for_prospecting=False)
+        prospects = list(prospects.order_by("-predictneed_acquisition_score")[:200])
+        for p in prospects:
+            last_signal = p.signals.order_by("-observed_at", "-detected_at").first()
+            p.last_signal = last_signal
+            p.last_signal_age_days = signal_age_days(last_signal.observed_at or last_signal.detected_at) if last_signal else None
+            p.has_linkedin_contact = bool(linkedin_profile_url(p))
+            p.decision_maker = p.contact_people.filter(is_active=True).order_by("-confidence_score").first()
+        context["prospects"] = prospects
+
+    return render(request, "prospects/web_intelligence.html", context)
+
+
+def _web_intelligence_redirect(request):
+    tab = request.POST.get("tab", "entreprises")
+    return redirect(f"{reverse('web_intelligence_hub')}?tab={tab}")
+
+
+def _web_intelligence_prospect_ids(request):
+    """Normalise la sélection (IDs de Prospect depuis Entreprises, ou IDs de
+    ContactPerson depuis Personnes) vers une liste d'IDs de Prospect
+    uniques — jamais de doublon d'entreprise entre les deux onglets."""
+    selected_ids = request.POST.getlist("selected")
+    if request.POST.get("source") == "person":
+        return list(ContactPerson.objects.filter(pk__in=selected_ids).values_list("prospect_id", flat=True).distinct())
+    return [int(pid) for pid in selected_ids if pid.isdigit()]
+
+
+@login_required
+def web_intelligence_add_to_prospects(request):
+    """Bulk « Ajouter aux Prospects » — ne fait jamais que ce que ferait un
+    ajout manuel un par un (même champ selected_for_prospecting/selected_at
+    que le reste de l'application, aucun raccourci sur les guardes de
+    campagne puisque celles-ci s'appliquent plus tard, à la création de
+    campagne)."""
+    if request.method != "POST":
+        return redirect("web_intelligence_hub")
+    prospect_ids = _web_intelligence_prospect_ids(request)
+    count = Prospect.objects.filter(pk__in=prospect_ids, selected_for_prospecting=False).update(
+        selected_for_prospecting=True, selected_at=timezone.now(),
+    )
+    if count:
+        messages.success(request, f"{count} entreprise(s) ajoutée(s) aux Prospects.")
+    else:
+        messages.info(request, "Ces entreprises étaient déjà dans les Prospects, ou aucune sélection.")
+    return _web_intelligence_redirect(request)
+
+
+@login_required
+def web_intelligence_bulk_enrich(request):
+    """Enrichissement multi-sources en masse depuis Web Intelligence, sur
+    n'importe quel Prospect existant (contrairement à prospect_bulk_enrich,
+    scopé à la liste Prospects déjà sélectionnés) — réutilise
+    enrich_prospect_task tel quel, jamais une deuxième logique
+    d'enrichissement."""
+    if request.method != "POST":
+        return redirect("web_intelligence_hub")
+    prospect_ids = _web_intelligence_prospect_ids(request)
+    prospects = Prospect.objects.filter(pk__in=prospect_ids)
+    for prospect in prospects:
+        enrich_prospect_task.delay(prospect.pk, None, request.user.pk)
+    count = prospects.count()
+    if count:
+        messages.success(request, f"Enrichissement (personnes + e-mails) lancé pour {count} entreprise(s).")
+    else:
+        messages.error(request, "Sélectionne au moins une ligne avant de lancer l'enrichissement.")
+    return _web_intelligence_redirect(request)
+
+
+@login_required
+def web_intelligence_add_to_campaign(request):
+    """Redirige vers la création de campagne avec la sélection — la création
+    de campagne applique déjà toutes les règles existantes (sélection
+    préalable requise, score, grade, DNC/suppression à l'envoi) : aucun
+    contournement possible depuis ce raccourci."""
+    if request.method != "POST":
+        return redirect("web_intelligence_hub")
+    prospect_ids = _web_intelligence_prospect_ids(request)
+    if not prospect_ids:
+        messages.error(request, "Sélectionne au moins une ligne avant de créer une campagne.")
+        return _web_intelligence_redirect(request)
+    ids_param = ",".join(str(pid) for pid in prospect_ids)
+    return redirect(f"{reverse('campaign_create')}?prospects={ids_param}")
 
 
 LINKEDIN_BUCKETS = [

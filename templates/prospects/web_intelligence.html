@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Web Intelligence | ProspectPilot Pro{% endblock %}
+
+{% block content %}
+<section class="page-intro">
+  <div>
+    <span class="eyebrow">WEB INTELLIGENCE</span>
+    <h1>Web Intelligence</h1>
+    <p>Entreprises découvertes, personnes détectées et preuves collectées — avant sélection pour la prospection. Aucun scraping LinkedIn, aucune donnée fabriquée.</p>
+  </div>
+</section>
+
+<section class="container-fluid px-lg-4 pb-5">
+  <ul class="nav nav-tabs mb-3">
+    <li class="nav-item"><a class="nav-link {% if tab == 'entreprises' %}active{% endif %}" href="?tab=entreprises">Entreprises</a></li>
+    <li class="nav-item"><a class="nav-link {% if tab == 'personnes' %}active{% endif %}" href="?tab=personnes">Personnes</a></li>
+    <li class="nav-item"><a class="nav-link {% if tab == 'data' %}active{% endif %}" href="?tab=data">Web Intelligence (données)</a></li>
+  </ul>
+
+  <form class="filter-bar compact flex-wrap gap-2 mb-3" method="get">
+    <input type="hidden" name="tab" value="{{ tab }}">
+    <input name="q" value="{{ q }}" placeholder="{% if tab == 'personnes' %}Personne, poste ou entreprise{% elif tab == 'data' %}Entreprise, donnée ou valeur{% else %}Entreprise, secteur, ville ou domaine{% endif %}">
+    {% if tab == "entreprises" %}
+      <label class="d-flex align-items-center gap-1"><input type="checkbox" name="only_new" value="1" {% if request.GET.only_new %}checked{% endif %}> Pas encore dans Prospects</label>
+    {% elif tab == "personnes" %}
+      <input name="job_title" value="{{ request.GET.job_title }}" placeholder="Poste / fonction" style="width:160px">
+      <input type="number" name="fit_min" value="{{ request.GET.fit_min }}" placeholder="FIT min" min="0" max="100" style="width:100px">
+      <input type="number" name="intent_min" value="{{ request.GET.intent_min }}" placeholder="INTENT min" min="0" max="100" style="width:110px">
+      <input type="number" name="confidence_min" value="{{ request.GET.confidence_min }}" placeholder="Confiance min" min="0" max="100" style="width:130px">
+      <label class="d-flex align-items-center gap-1"><input type="checkbox" name="has_email" value="1" {% if request.GET.has_email %}checked{% endif %}> Email dispo.</label>
+      <label class="d-flex align-items-center gap-1"><input type="checkbox" name="has_linkedin" value="1" {% if request.GET.has_linkedin %}checked{% endif %}> LinkedIn dispo.</label>
+    {% elif tab == "data" %}
+      <select name="field_name">
+        <option value="">Donnée — toutes</option>
+        {% for name in field_names %}<option value="{{ name }}" {% if request.GET.field_name == name %}selected{% endif %}>{{ name }}</option>{% endfor %}
+      </select>
+      <select name="status">
+        <option value="">Statut — tous</option>
+        {% for key, label in verification_choices %}<option value="{{ key }}" {% if request.GET.status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    {% endif %}
+    <button class="btn btn-dark">Filtrer</button>
+  </form>
+
+  {% if tab == "entreprises" %}
+    <form id="wi-form" method="post" action="">
+      {% csrf_token %}
+      <input type="hidden" name="tab" value="entreprises">
+      <input type="hidden" name="source" value="prospect">
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="wi-select-all"></th>
+              <th>Entreprise</th><th>Site</th><th>Secteur</th><th>Taille</th>
+              <th>FIT</th><th>INTENT</th><th>Dernier signal</th><th>Email</th><th>LinkedIn</th><th>Décideur</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in prospects %}
+              <tr>
+                <td><input type="checkbox" name="selected" class="wi-checkbox" value="{{ p.pk }}"></td>
+                <td>{{ p.name }} {% if p.selected_for_prospecting %}<span class="status-pill status-success">Déjà dans Prospects</span>{% endif %}</td>
+                <td>{% if p.website %}<a href="{{ p.website }}" target="_blank">{{ p.website|truncatechars:28 }}</a>{% else %}—{% endif %}</td>
+                <td>{{ p.sector|default:"—" }}</td>
+                <td>{{ p.employee_band|default:"—" }}</td>
+                <td>{{ p.icp_fit_score }}</td>
+                <td>{{ p.intent_score }}</td>
+                <td>{% if p.last_signal_age_days is not None %}{{ p.last_signal_age_days|floatformat:0 }}j{% else %}—{% endif %}</td>
+                <td>{{ p.public_email|default:"—" }}</td>
+                <td>{% if p.has_linkedin_contact %}<i class="bi bi-linkedin text-primary"></i>{% else %}—{% endif %}</td>
+                <td>{% if p.decision_maker %}<a href="{% url 'contact_person_detail' p.decision_maker.pk %}">{{ p.decision_maker.job_title|default:p.decision_maker.full_name }}</a>{% else %}—{% endif %}</td>
+                <td><a href="{% url 'prospect_detail' p.pk %}">Ouvrir <i class="bi bi-arrow-up-right"></i></a></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="11">Aucune entreprise pour ce filtre.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="action-row">
+        <label class="d-flex align-items-center gap-2"><input type="checkbox" id="wi-select-all-bottom"> Tout sélectionner</label>
+        <button type="submit" formaction="{% url 'web_intelligence_add_to_prospects' %}" class="btn btn-primary-custom">Ajouter aux Prospects</button>
+        <button type="submit" formaction="{% url 'web_intelligence_bulk_enrich' %}" class="btn btn-outline-dark">Enrichir (personnes + e-mails)</button>
+        <button type="submit" formaction="{% url 'web_intelligence_add_to_campaign' %}" class="btn btn-outline-dark">Ajouter à une campagne</button>
+      </div>
+    </form>
+
+  {% elif tab == "personnes" %}
+    <form id="wi-form" method="post" action="">
+      {% csrf_token %}
+      <input type="hidden" name="tab" value="personnes">
+      <input type="hidden" name="source" value="person">
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="wi-select-all"></th>
+              <th>Personne</th><th>Poste</th><th>Entreprise</th><th>Email</th><th>Statut email</th><th>LinkedIn</th><th>Confiance</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for person in people %}
+              <tr>
+                <td><input type="checkbox" name="selected" class="wi-checkbox" value="{{ person.pk }}"></td>
+                <td>{{ person.full_name|default:"—" }}</td>
+                <td>{{ person.job_title|default:"—" }}</td>
+                <td><a href="{% url 'prospect_detail' person.prospect_id %}">{{ person.prospect.name }}</a></td>
+                <td>{{ person.email|default:"—" }}</td>
+                <td>{{ person.get_verification_status_display }}</td>
+                <td>{% if person.profile_url %}<a href="{{ person.profile_url }}" target="_blank"><i class="bi bi-linkedin text-primary"></i></a>{% else %}—{% endif %}</td>
+                <td>{{ person.confidence_score }}/100</td>
+                <td><a href="{% url 'contact_person_detail' person.pk %}">Fiche <i class="bi bi-arrow-up-right"></i></a></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="9">Aucune personne pour ce filtre.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="action-row">
+        <label class="d-flex align-items-center gap-2"><input type="checkbox" id="wi-select-all-bottom"> Tout sélectionner</label>
+        <button type="submit" formaction="{% url 'web_intelligence_add_to_prospects' %}" class="btn btn-primary-custom">Ajouter leur entreprise aux Prospects</button>
+        <button type="submit" formaction="{% url 'web_intelligence_bulk_enrich' %}" class="btn btn-outline-dark">Enrichir (décideurs + e-mails)</button>
+        <button type="submit" formaction="{% url 'web_intelligence_add_to_campaign' %}" class="btn btn-outline-dark">Ajouter à une campagne</button>
+      </div>
+    </form>
+
+  {% else %}
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead>
+          <tr><th>Entreprise</th><th>Donnée</th><th>Valeur</th><th>Source</th><th>Type</th><th>Date</th><th>Confiance</th><th>Statut</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for evidence in evidence_items %}
+            <tr>
+              <td><a href="{% url 'prospect_detail' evidence.prospect_id %}">{{ evidence.prospect.name }}</a></td>
+              <td>{{ evidence.field_name }}</td>
+              <td>{{ evidence.value|truncatechars:60 }}</td>
+              <td>{{ evidence.source.name|default:"—" }}</td>
+              <td>{{ evidence.get_value_type_display }}</td>
+              <td>{{ evidence.collected_at|date:"d/m/Y" }}</td>
+              <td>{{ evidence.confidence_score }}/100</td>
+              <td><span class="status-pill">{{ evidence.get_verification_status_display }}</span></td>
+              <td>{% if evidence.source_url %}<a href="{{ evidence.source_url }}" target="_blank">Source <i class="bi bi-box-arrow-up-right"></i></a>{% else %}—{% endif %}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="9">Aucune donnée pour ce filtre.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>
+<script>
+(() => {
+  const form = document.getElementById("wi-form");
+  if (!form) return;
+  const boxes = () => Array.from(form.querySelectorAll(".wi-checkbox"));
+  const syncAll = (checked) => boxes().forEach((b) => { b.checked = checked; });
+  ["wi-select-all", "wi-select-all-bottom"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", (e) => syncAll(e.target.checked));
+  });
+})();
+</script>
+{% endblock %}
