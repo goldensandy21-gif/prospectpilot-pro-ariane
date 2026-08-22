@@ -72,6 +72,14 @@ def process_predictneed_event(payload):
         from .alerts import check_engagement_alert
         check_engagement_alert(prospect, engagement)
 
+        # Correctif d'audit : recalcul temps réel — engagement_score ET la
+        # "Priorité" canonique doivent refléter immédiatement ce nouvel
+        # événement, sans attendre un prochain passage explicite du
+        # pipeline. score_prospect() ne fait que lire les événements/signaux
+        # existants (aucune écriture chez PredictNeed IA, aucune boucle).
+        from .predictneed_scoring import score_prospect
+        score_prospect(prospect)
+
     response = {"status": "ok", "engagement_event_id": engagement.pk}
 
     if campaign_prospect:

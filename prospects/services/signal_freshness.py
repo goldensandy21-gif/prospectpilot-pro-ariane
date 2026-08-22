@@ -52,9 +52,20 @@ def signal_freshness(observed_at, now=None):
 
 def signal_effective_impact(signal, now=None):
     """Impact ACTUEL d'un ProspectSignal, pondéré par sa fraîcheur — distinct
-    de `signal.score_impact` (note brute, jamais modifiée ici). Utilise
-    `observed_at` si connu, sinon retombe sur `detected_at` (date de création
-    de la ligne, meilleure donnée disponible à défaut d'observation datée)."""
-    freshness = signal_freshness(signal.observed_at or signal.detected_at, now=now)
+    de `signal.score_impact` (note brute, jamais modifiée ici).
+
+    Correctif d'audit : pour un signal `signal_group="intent"`, `observed_at`
+    est la SEULE date acceptée — jamais de repli sur `detected_at` (date à
+    laquelle ProspectPilot a créé la ligne, pas date de l'événement réel).
+    Un signal intent sans date réelle connue reste "date inconnue" (poids
+    nul), plutôt que de bénéficier à tort du multiplicateur "très frais"
+    simplement parce que ProspectPilot vient de le découvrir. Pour un signal
+    FIT/risk (un fait constaté sur un état présent, jamais pondéré par
+    fraîcheur dans les scores), `detected_at` reste un repli légitime."""
+    if signal.signal_group == "intent":
+        reference_date = signal.observed_at
+    else:
+        reference_date = signal.observed_at or signal.detected_at
+    freshness = signal_freshness(reference_date, now=now)
     raw = signal.score_impact if signal.positive else -abs(signal.score_impact)
     return raw * freshness["multiplier"], freshness

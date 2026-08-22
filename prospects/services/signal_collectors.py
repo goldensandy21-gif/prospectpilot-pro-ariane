@@ -20,11 +20,16 @@ déjà exploitée (audit fait avant ce module) :
   volume de signaux bruyant et redondant avec PublicEmail/PublicPhone/
   ContactPerson eux-mêmes déjà couverts. Seuls les faits qui ont un sens
   commercial direct (présence sociale, décideur) sont transformés ici.
-- `SearchConsoleMetric`/`SiteAuditSummary`/PageSpeed (`services/search_console.py`,
+- `SearchConsoleMetric`/PageSpeed (`services/search_console.py`,
   `services/pagespeed.py`) -> DÉLIBÉRÉMENT exclus : ils appartiennent au
   pipeline d'audit technique historique (`audit_site_task`), séparé du
   parcours Recherche → Sélection → Prospects unifié en Mission 5, et
   `SearchConsoleMetric` n'a même pas de clé étrangère vers `Prospect`.
+- `SiteAuditSummary.technologies` -> réutilisé de façon ciblée par
+  `SiteChangeSignalCollector` (correctif d'audit, round 2) : c'est la seule
+  donnée déjà existante qui donne deux VRAIS instantanés datés comparables
+  d'un même prospect (un par "Audit multi-pages"). Rien d'autre de
+  `SiteAuditSummary` (scores performance/SEO...) n'est exploité ici.
 
 Aucun collecteur ci-dessous n'effectue d'appel réseau lui-même : chacun lit
 des données DÉJÀ collectées et déjà persistées (technologies, quick scan,
@@ -43,7 +48,7 @@ datés par preuve et jamais par déduction :
   source d'enrichissement, sans scraping LinkedIn).
 """
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from django.utils import timezone
 
@@ -147,48 +152,57 @@ class DecisionMakerSignalCollector(SignalCollector):
 
 
 class SiteChangeSignalCollector(SignalCollector):
-    """Correctif d'audit (section 8, point 3) : premier collecteur
-    RÉELLEMENT temporel — une technologie/capacité apparue depuis un scan
-    antérieur, datée par comparaison, pas par une simple première détection.
+    """Correctif d'audit (round 2) : la version précédente concluait qu'une
+    technologie était "nouvelle" simplement parce qu'une AUTRE technologie du
+    même prospect était ancienne — ça ne prouve pas l'ABSENCE de cette
+    technologie lors d'un scan antérieur (elle a pu être présente mais mal
+    détectée, ou ajoutée par un changement de notre propre logique de
+    détection, pas du site du prospect).
 
-    Ne produit un signal QUE si le prospect a un historique de scan avéré
-    (au moins une ProspectTechnology détectée il y a plus de
-    `NEW_TECH_BUFFER_DAYS`) : sans cet historique, on ne peut pas distinguer
-    "changement récent" de "c'est notre toute première visite du site" —
-    dans le doute, aucun signal n'est créé (jamais d'invention). `observed_at`
-    = la date réelle de première détection de la nouvelle technologie."""
+    Corrigé : réutilise `SiteAuditSummary.technologies` (JSONField déjà
+    existant, une vraie photographie datée par `crawl_run`/`created_at` à
+    chaque "Audit multi-pages") — aucun deuxième système de snapshots créé.
+    Compare les DEUX derniers `SiteAuditSummary` du même prospect : une
+    technologie n'est "nouvelle" QUE si elle est ABSENTE du snapshot
+    précédent ET présente dans le snapshot actuel — une preuve à deux états
+    comparables, pas une déduction. S'il n'existe pas deux audits distincts
+    pour ce prospect, aucun signal (silence plutôt qu'invention)."""
     name = "site_change"
     source_kind = "website"
 
-    NEW_TECH_BUFFER_DAYS = 7
-
     def collect(self, prospect):
-        from ..models import ProspectTechnology
+        from ..models import SiteAuditSummary
 
-        now = timezone.now()
-        cutoff = now - timedelta(days=self.NEW_TECH_BUFFER_DAYS)
-        has_prior_history = ProspectTechnology.objects.filter(
-            prospect=prospect, detected_at__lt=cutoff,
-        ).exists()
-        if not has_prior_history:
+        summaries = list(
+            SiteAuditSummary.objects.filter(prospect=prospect).order_by("-created_at")[:2]
+        )
+        if len(summaries) < 2:
+            return []
+
+        current, previous = summaries
+        newly_appeared = sorted(set(current.technologies or []) - set(previous.technologies or []))
+        if not newly_appeared:
             return []
 
         signals = []
-        for tech in ProspectTechnology.objects.filter(prospect=prospect, detected_at__gte=cutoff):
+        for technology in newly_appeared:
             signals.append(_signal(
-                prospect, f"site_change_{tech.technology}", "timing",
-                f"Nouvelle technologie détectée sur le site : {tech.technology}",
-                value=tech.technology, source_url=tech.source_url,
-                evidence=f"Absente lors d'un scan antérieur à {cutoff:%d/%m/%Y}, détectée le {tech.detected_at:%d/%m/%Y}.",
-                confidence=tech.confidence, score_impact=8, positive=True,
-                source_kind=self.source_kind, signal_group="intent", observed_at=tech.detected_at,
+                prospect, f"site_change_{technology}", "timing",
+                f"Nouvelle technologie détectée sur le site : {technology}",
+                value=technology, source_url=prospect.website,
+                evidence=(
+                    f"Absente de l'audit du {previous.created_at:%d/%m/%Y}, "
+                    f"présente dans celui du {current.created_at:%d/%m/%Y}."
+                ),
+                confidence=75, score_impact=8, positive=True,
+                source_kind=self.source_kind, signal_group="intent", observed_at=current.created_at,
             ))
         return signals
 
 
 class RecentActivitySignalCollector(SignalCollector):
-    """Correctif d'audit (section 8, point 3) : recrutement Growth/Marketing/
-    CRO récent ou actualité récente liée acquisition/conversion/analytics.
+    """Recrutement Growth/Marketing/CRO récent ou actualité récente liée
+    acquisition/conversion/analytics.
 
     Lit des preuves déjà déposées dans `ProspectEvidence` (registre générique
     d'enrichissement déjà existant — aucune nouvelle table) dont
@@ -197,12 +211,20 @@ class RecentActivitySignalCollector(SignalCollector):
     fait, pas date à laquelle le fait s'est produit). Sans date réelle
     explicite, aucun signal n'est créé : silence plutôt qu'invention.
 
-    Aucune connexion réseau ici — ce collecteur normalise une preuve déjà
-    présente. Une future source d'enrichissement (offres d'emploi, actualité
-    entreprise, sur une API publique/autorisée) alimenterait
-    `ProspectEvidence` avec ces `field_name` et une date réelle ; ce
-    collecteur la transformerait alors en signal INTENT correctement daté,
-    sans qu'aucun code ici ne change. Jamais de scraping LinkedIn."""
+    ÉTAT (correctif d'audit, round 2) — déclaré HONNÊTEMENT dormant :
+    aucune source actuelle ne crée de ProspectEvidence avec ces
+    `field_name`. Pas dans `DEFAULT_COLLECTORS` (voir plus bas) pour ne
+    jamais laisser croire qu'il est actif. Aucune connexion réseau ici — ce
+    collecteur normalise une preuve déjà présente, il ne va pas la chercher.
+
+    Candidate réelle documentée pour une prochaine session, jamais implémentée
+    faute de clé d'accès disponible ici : l'API publique et gratuite
+    "Offres d'emploi" de France Travail (api.francetravail.io, inscription
+    développeur gratuite, données officielles avec date de publication
+    réelle) pourrait alimenter `job_posting_growth` avec des dates fiables.
+    Aucune autre source gratuite/fiable identifiée pour `news_acquisition`
+    à ce stade. Jamais de scraping LinkedIn — explicitement exclu par la
+    mission."""
     name = "recent_activity"
     source_kind = "open_web"
 
@@ -235,13 +257,18 @@ class RecentActivitySignalCollector(SignalCollector):
         return signals
 
 
+# Correctif d'audit (round 2) : RecentActivitySignalCollector n'est PAS dans
+# DEFAULT_COLLECTORS. Il est correct et testé, mais aucune source réelle ne
+# crée aujourd'hui de ProspectEvidence(field_name="job_posting_growth"/
+# "news_acquisition") — l'inclure ici donnerait l'illusion trompeuse d'un
+# collecteur actif alors qu'il ne produit jamais rien en production. Voir la
+# docstring de la classe : source candidate documentée, pas encore branchée.
 DEFAULT_COLLECTORS = [
     TechnologySignalCollector(),
     QuickScanSignalCollector(),
     SocialPresenceSignalCollector(),
     DecisionMakerSignalCollector(),
     SiteChangeSignalCollector(),
-    RecentActivitySignalCollector(),
 ]
 
 

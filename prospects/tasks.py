@@ -550,6 +550,18 @@ def audit_site_task(self, prospect_id, max_pages=None):
         summary = SiteAuditSummary.objects.create(
             prospect=prospect, crawl_run=run, **summary_data, **speed
         )
+
+        # Correctif d'audit (Mission 6) : chaque nouvel audit devient un
+        # instantané comparable au précédent — dès qu'un deuxième audit
+        # existe pour ce prospect, une technologie réellement apparue entre
+        # les deux devient un vrai signal INTENT daté. Isolé (jamais
+        # bloquant) : un échec ici ne doit jamais faire échouer l'audit.
+        try:
+            from .services.signal_collectors import SiteChangeSignalCollector, run_signal_collectors
+            run_signal_collectors(prospect, collectors=[SiteChangeSignalCollector()])
+        except Exception:
+            pass
+
         tech, commercial, fit, priority, reasons = calculate_scores(prospect, summary, page_objects)
         prospect.technical_score = tech
         prospect.commercial_score = commercial

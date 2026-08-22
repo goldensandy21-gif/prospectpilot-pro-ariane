@@ -250,6 +250,15 @@ def persist_signals(prospect, signal_objects):
     from .alerts import check_signal_alerts
     check_signal_alerts(prospect, saved)
 
+    # Correctif d'audit : recalcul temps réel — un nouveau signal doit
+    # immédiatement se refléter dans intent_score/engagement_score ET la
+    # "Priorité" canonique (score_prospect() rafraîchit les deux, voir
+    # predictneed_scoring.py), pas seulement au prochain passage explicite
+    # du pipeline. Lecture seule sur ProspectSignal : aucune boucle possible.
+    if saved:
+        from .predictneed_scoring import score_prospect
+        score_prospect(prospect)
+
     return saved
 
 

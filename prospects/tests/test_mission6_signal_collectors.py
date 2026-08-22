@@ -152,36 +152,68 @@ class QuickScanSignalCollectorTests(TestCase):
             self.assertEqual(signal.signal_group, "fit")
 
 
+def _audit_summary(prospect, technologies, created_at):
+    from prospects.models import CrawlRun, SiteAuditSummary
+
+    run = CrawlRun.objects.create(prospect=prospect, start_url=prospect.website or "https://example.com", status="done")
+    summary = SiteAuditSummary.objects.create(prospect=prospect, crawl_run=run, technologies=technologies)
+    SiteAuditSummary.objects.filter(pk=summary.pk).update(created_at=created_at)
+    return summary
+
+
 class SiteChangeSignalCollectorTests(TestCase):
-    def test_no_prior_history_produces_no_signal(self):
-        """Sans scan antérieur, on ne peut pas distinguer un vrai changement
-        d'une simple première visite du site — donc aucun signal."""
+    """Correctif d'audit (round 2) : un changement doit être prouvé par deux
+    états comparables (absent puis présent), jamais déduit du simple fait
+    qu'une AUTRE technologie du prospect est ancienne."""
+
+    def test_fewer_than_two_audits_produces_no_signal(self):
         prospect = make_prospect()
-        ProspectTechnology.objects.create(prospect=prospect, technology="Google Analytics", category="analytics")
         self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
 
-    def test_new_technology_since_prior_scan_produces_a_dated_intent_signal(self):
+        _audit_summary(prospect, ["Google Analytics"], timezone.now())
+        self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
+
+    def test_technology_absent_then_present_produces_a_dated_intent_signal(self):
         now = timezone.now()
         prospect = make_prospect()
-        old_tech = ProspectTechnology.objects.create(prospect=prospect, technology="Google Analytics", category="analytics")
-        ProspectTechnology.objects.filter(pk=old_tech.pk).update(detected_at=now - timedelta(days=30))
-
-        new_tech = ProspectTechnology.objects.create(prospect=prospect, technology="HubSpot", category="crm")
-        ProspectTechnology.objects.filter(pk=new_tech.pk).update(detected_at=now - timedelta(days=1))
+        _audit_summary(prospect, ["Google Analytics"], now - timedelta(days=30))
+        _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=1))
 
         signals = SiteChangeSignalCollector().collect(prospect)
         self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].value, "HubSpot")
         self.assertEqual(signals[0].signal_group, "intent")
         self.assertIsNotNone(signals[0].observed_at)
 
-    def test_technology_within_buffer_of_first_scan_is_not_flagged_as_change(self):
-        """Une technologie détectée il y a 2 jours, sans AUCUNE technologie
-        plus ancienne que le buffer, ne prouve rien de plus qu'une première
-        visite récente — pas de signal."""
+    def test_technology_present_in_both_audits_produces_no_signal(self):
+        """Une technologie ancienne, simplement reconfirmée par un nouvel
+        audit, n'est pas un changement — même si un autre prospect ou une
+        autre technologie a bien changé ailleurs."""
         now = timezone.now()
         prospect = make_prospect()
-        tech = ProspectTechnology.objects.create(prospect=prospect, technology="Google Analytics", category="analytics")
-        ProspectTechnology.objects.filter(pk=tech.pk).update(detected_at=now - timedelta(days=2))
+        _audit_summary(prospect, ["Google Analytics"], now - timedelta(days=30))
+        _audit_summary(prospect, ["Google Analytics"], now - timedelta(days=1))
+        self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
+
+    def test_technology_never_absent_before_is_never_flagged_even_if_another_is_old(self):
+        """Reproduit exactement le bug corrigé : HubSpot est présent dans
+        les DEUX audits (donc jamais prouvé absent avant) — le fait que
+        Google Analytics soit ancien ne doit pas le faire conclure "nouveau"."""
+        now = timezone.now()
+        prospect = make_prospect()
+        _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=60))
+        _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=1))
+        self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
+
+    def test_only_compares_the_two_most_recent_audits(self):
+        now = timezone.now()
+        prospect = make_prospect()
+        _audit_summary(prospect, [], now - timedelta(days=90))
+        _audit_summary(prospect, ["HubSpot"], now - timedelta(days=45))
+        _audit_summary(prospect, ["HubSpot"], now - timedelta(days=1))
+        # HubSpot est apparu il y a 45 jours (entre le 1er et le 2e audit),
+        # mais était déjà présent lors du dernier changement de référence
+        # (2e vs 3e audit) -> pas un signal "nouveau" à ce stade.
         self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
 
 

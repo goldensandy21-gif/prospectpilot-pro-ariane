@@ -54,6 +54,20 @@ class ComputeIntentScoreTests(TestCase):
         self.assertGreater(score, 20)
         self.assertTrue(any("Signal hiring_growth" in r for r in reasons))
 
+    def test_intent_signal_with_unknown_date_never_raises_the_score(self):
+        """Correctif d'audit : intent + observed_at=None + detected_at="maintenant"
+        (auto_now_add, ligne créée à l'instant) => intent_score ne monte pas —
+        jamais de repli implicite sur la date de création de la ligne."""
+        ProspectSignal.objects.create(
+            prospect=self.prospect, signal_type="undated_intent", category="timing",
+            signal_group="intent", source_kind="open_web", label="Signal sans date réelle",
+            evidence="preuve", confidence=75, score_impact=10, positive=True,
+            observed_at=None,
+            fingerprint=signal_fingerprint("undated_intent", "", "preuve"),
+        )
+        score, reasons = compute_intent_score(self.prospect, now=self.now)
+        self.assertEqual(score, 0)
+
     def test_repetition_of_recent_signals_scores_higher_than_single_signal(self):
         single_prospect = make_prospect(siret="11111111111111")
         _intent_signal(single_prospect, "hiring_growth", days_ago=1, now=self.now)

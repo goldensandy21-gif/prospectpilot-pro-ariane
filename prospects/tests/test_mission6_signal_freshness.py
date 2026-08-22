@@ -90,6 +90,27 @@ class SignalEffectiveImpactTests(TestCase):
         impact, _ = signal_effective_impact(signal, now=self.now)
         self.assertLess(impact, 0)
 
+    def test_intent_signal_with_unknown_observed_at_never_falls_back_to_detected_at(self):
+        """Correctif d'audit : un signal intent sans date réelle connue doit
+        produire age_days=None, multiplier=0, impact=0 — même si detected_at
+        (date de création de la ligne) est "maintenant"."""
+        from prospects.models import ProspectSignal
+
+        signal = ProspectSignal.objects.create(
+            prospect=self.prospect, signal_type="undated_intent", category="timing",
+            signal_group="intent", source_kind="open_web", label="Signal sans date réelle",
+            evidence="preuve", confidence=70, score_impact=10, positive=True,
+            observed_at=None,  # date réelle inconnue
+            fingerprint=signal_fingerprint("undated_intent", "", "preuve"),
+        )
+        # detected_at (auto_now_add) vaut "maintenant" — ne doit jamais servir de repli.
+        self.assertIsNotNone(signal.detected_at)
+
+        impact, freshness = signal_effective_impact(signal, now=self.now)
+        self.assertIsNone(freshness["age_days"])
+        self.assertEqual(freshness["multiplier"], 0)
+        self.assertEqual(impact, 0)
+
     def _signal(self, days_ago, score_impact, positive=True, signal_type="test_signal"):
         from prospects.models import ProspectSignal
         observed_at = self.now - timedelta(days=days_ago)

@@ -34,19 +34,28 @@ def compute_intent_score(prospect, now=None):
     if not intent_signals:
         return 0, ["Aucun signal d'intention détecté."]
 
-    score = BASE_SCORE
     reasons = []
     recent_count = 0
     contributions = []
+    total_impact = 0.0
 
     for signal in intent_signals:
         impact, freshness = signal_effective_impact(signal, now=now)
         contributions.append((signal, impact, freshness))
         if impact == 0:
             continue
-        score += impact
+        total_impact += impact
         if freshness["age_days"] is not None and freshness["age_days"] <= RECENT_SIGNAL_THRESHOLD_DAYS:
             recent_count += 1
+
+    # Correctif d'audit : la base de 20 points ne s'applique que s'il existe
+    # AU MOINS un signal avec un impact actuel non nul (daté et pas obsolète)
+    # — un prospect qui n'a que des signaux intent sans date réelle connue
+    # (ou tous obsolètes) doit rester à 0, jamais à 20 "par défaut".
+    if total_impact == 0:
+        return 0, ["Signaux d'intention présents mais sans impact actuel (date inconnue ou obsolète)."]
+
+    score = BASE_SCORE + total_impact
 
     contributions.sort(key=lambda item: abs(item[1]), reverse=True)
     for signal, impact, freshness in contributions[:5]:
@@ -62,9 +71,6 @@ def compute_intent_score(prospect, now=None):
         bonus = min(REPETITION_BONUS_CAP, (recent_count - 1) * REPETITION_BONUS_PER_EXTRA_SIGNAL)
         score += bonus
         reasons.insert(0, f"{recent_count} signaux d'intention récents (< {RECENT_SIGNAL_THRESHOLD_DAYS}j), dont au moins 2 : bonus de répétition (+{bonus}).")
-
-    if not reasons:
-        reasons.append("Signaux d'intention présents mais tous obsolètes : impact actuel nul.")
 
     return _clip(score), reasons
 
