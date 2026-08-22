@@ -508,3 +508,41 @@ total, dont 1 `TransactionTestCase` PostgreSQL) :
    PublicContactForm, PublicSocialLink, ProspectSignal, ProspectTechnology,
    SearchCandidate, ContactPerson) : PKs identiques avant/après, zéro perte
    sur aucune table.
+
+## Correctifs suite à audit indépendant, round 3
+
+Un troisième audit a confirmé le round 2 mais trouvé 7 points
+supplémentaires, tous corrigés (23 nouveaux tests, 363 au total) :
+
+1. **Ordre transactionnel du webhook** — `score_prospect()` déplacé en tout
+   dernier dans `process_predictneed_event()` (après predictneed_stage/
+   CampaignProspect/ConversionEvent/RevenueAttribution) : sinon
+   `_hard_exclusion()` ne voyait pas encore `predictneed_stage="paying"`
+   lors d'un `subscription_activated`. Testé sur les 4 valeurs exactes
+   (stage/excluded/score/grade), pas seulement Engagement.
+2. **subscription_cancelled** — nouvel état `"churned"` (Prospect et
+   CampaignProspect, réutilisation symétrique de `STAGE_MAP`) : plus
+   hard-exclu (candidat légitime à une reconquête), séquence active
+   arrêtée, NBA dédiée (`NURTURE` win-back), `RevenueAttribution`
+   historique jamais touché.
+3. **Échec e-mail** — `_execute_step` ne fait plus jamais avancer l'étape
+   aveuglément : `sent`→avance, `failed`→n'avance pas (retry), `suppressed`
+   →arrêt séquence + DNC, `blocked`→n'avance pas, raison exploitable.
+4. **Site Change strict** — ne compare que des `CrawlRun status="done"`,
+   même `start_url`, couverture comparable (`pages_crawled`, ratio ≥ 50%).
+   Appel déplacé après la finalisation réussie du `CrawlRun` dans
+   `audit_site_task` (sinon `pages_crawled` valait encore 0 au moment de
+   l'appel).
+5. **Dernier tri legacy supprimé** — `scheduled_refresh_top_prospects()`
+   trie sur `predictneed_acquisition_score` ; `Prospect.Meta.ordering`
+   corrigé à la racine. Tous les autres usages de `priority_score` audités
+   et classés purement legacy (admin, exports, ancien pipeline technique) —
+   aucun n'influence plus de décision commerciale.
+6. **Migration 0013 réécrite** — 3 cas explicites (anciens défauts exacts →
+   nouveaux défauts exacts ; profil personnalisé → proportions relatives
+   dans 75% via la méthode du plus grand reste, somme exactement 100 ;
+   vide → laissé vide). Vérifié sur Postgres 18 réel avec 3 profils réels
+   couvrant les 3 cas.
+7. **Migrations depuis 0004** — rechaîne complète sur Postgres 18 réel,
+   9 modèles + 3 ICPProfile (cas A/B/C), PKs identiques, `manage.py check`/
+   `makemigrations --check` propres, tests de concurrence toujours verts.
