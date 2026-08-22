@@ -15,9 +15,19 @@ GROWTH_KEYWORDS = [
     "e-commerce", "ecommerce", "commercial", "sales", "seo", "sea", "ads",
     "traffic", "trafic",
 ]
+# Audit correctif round 2, §5 — des phrases spécifiques à un évènement
+# stratégique RÉEL, jamais un mot isolé ("acquisition", "investissement")
+# que n'importe quel article marketing générique emploie couramment
+# ("5 stratégies d'acquisition client", "vos investissements marketing").
+# Une actualité qui ne matche aucune de ces phrases reste FIT/activité au
+# mieux (dated_content_published), jamais un signal Intent.
 ACQUISITION_NEWS_KEYWORDS = [
-    "rachète", "rachete", "rachat", "acquisition", "fusion", "levée de fonds",
-    "leve des fonds", "levee de fonds", "investissement", "partenariat stratégique",
+    "rachète", "rachete", "racheté", "rachetee", "rachetée", "rachat de",
+    "fusion",
+    "levée de fonds", "lève des fonds", "leve des fonds", "levee de fonds",
+    "investissement reçu", "investissement recu", "reçoit un investissement",
+    "recoit un investissement", "nouveau financement", "tour de financement",
+    "partenariat stratégique", "partenariat strategique",
 ]
 
 

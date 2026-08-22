@@ -27,9 +27,24 @@ def _xml_response(content, status_code=200, url="https://exemple.fr/sitemap.xml"
     r = Mock(spec=httpx.Response)
     r.status_code = status_code
     r.content = content.encode("utf-8")
+    r.headers = {"content-type": "application/xml"}
     r.url = url
     r.history = []
+    r.iter_bytes = lambda: iter([r.content])
     return r
+
+
+class _StreamCtx:
+    """Audit correctif round 2, §2 — safe_get() lit via client.stream()."""
+
+    def __init__(self, response):
+        self.response = response
+
+    def __enter__(self):
+        return self.response
+
+    def __exit__(self, *args):
+        return False
 
 
 class FakeXmlClient:
@@ -47,6 +62,12 @@ class FakeXmlClient:
         self.requested.append(url)
         if url in self.pages:
             return self.pages[url]
+        raise httpx.HTTPError("not found")
+
+    def stream(self, method, url, **kwargs):
+        self.requested.append(url)
+        if url in self.pages:
+            return _StreamCtx(self.pages[url])
         raise httpx.HTTPError("not found")
 
 

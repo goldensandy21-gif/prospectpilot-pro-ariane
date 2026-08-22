@@ -12,7 +12,7 @@ from .technology import detect_technologies
 from .people_extraction import extract_people_from_page
 from .structured_data import extract_json_ld_blocks, find_dated_content, find_meta_published_time
 from .temporal_signals import classify_dated_fact
-from .url_safety import UnsafeUrlError, assert_safe_response, is_safe_url
+from .url_safety import UnsafeUrlError, is_safe_url, safe_get
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 PHONE_RE = re.compile(r"(?:\+33|0)[1-9](?:[ .-]?\d{2}){4}")
@@ -230,14 +230,10 @@ def analyze_html(url, response, depth):
 def check_links(client, urls, max_links=30):
     broken = 0
     for url in list(dict.fromkeys(urls))[:max_links]:
-        if not is_safe_url(url):
-            continue
         try:
-            r = client.head(url, timeout=6, follow_redirects=True)
-            assert_safe_response(r)
+            r = safe_get(client, url, method="HEAD", timeout=6)
             if r.status_code >= 400:
-                r = client.get(url, timeout=8, follow_redirects=True)
-                assert_safe_response(r)
+                r = safe_get(client, url, method="GET", timeout=8)
             if r.status_code >= 400:
                 broken += 1
         except (httpx.HTTPError, UnsafeUrlError):
@@ -281,18 +277,15 @@ def sitemap_urls(start_url, policy=None, max_urls=200, max_child_sitemaps=3):
     results = []
     seen_sitemaps = set()
 
-    with httpx.Client(headers=headers, timeout=12, follow_redirects=True) as client:
+    with httpx.Client(headers=headers, timeout=12) as client:
         queue = deque((url, 0) for url in candidates[:max_child_sitemaps])
         while queue and len(results) < max_urls:
             sitemap_url, depth = queue.popleft()
             if sitemap_url in seen_sitemaps or not policy.allowed(sitemap_url):
                 continue
-            if not is_safe_url(sitemap_url):
-                continue
             seen_sitemaps.add(sitemap_url)
             try:
-                response = client.get(sitemap_url)
-                assert_safe_response(response)
+                response = safe_get(client, sitemap_url)
                 if response.status_code >= 400:
                     continue
                 kind, entries = _parse_sitemap_xml(response.content)
@@ -351,7 +344,7 @@ def crawl_site(start_url, max_pages=None, check_broken_links=True):
     pages = []
 
     headers = {"User-Agent":settings.USER_AGENT, "Accept":"text/html,application/xhtml+xml"}
-    with httpx.Client(headers=headers, timeout=18, follow_redirects=True) as client:
+    with httpx.Client(headers=headers, timeout=18) as client:
         while queue and len(pages) < max_pages:
             url, depth = queue.popleft()
             url = urldefrag(url)[0]
@@ -360,12 +353,9 @@ def crawl_site(start_url, max_pages=None, check_broken_links=True):
             seen.add(url)
             if not policy.allowed(url):
                 continue
-            if not is_safe_url(url):
-                continue
             started = time.perf_counter()
             try:
-                response = client.get(url)
-                assert_safe_response(response)
+                response = safe_get(client, url)
                 elapsed = round((time.perf_counter()-started)*1000)
                 if response.status_code >= 400 or "text/html" not in response.headers.get("content-type",""):
                     continue

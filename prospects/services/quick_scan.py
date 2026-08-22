@@ -19,7 +19,7 @@ from .crawler import (
 from .people_extraction import extract_people_from_page
 from .robots import RobotsPolicy
 from .technology import detect_technologies, detect_technologies_detailed
-from .url_safety import UnsafeUrlError, assert_safe_response, is_safe_url
+from .url_safety import UnsafeUrlError, safe_get
 
 # Priorité 1 (mission 5, section 2) : pages où l'on trouve réellement des
 # coordonnées publiques (contact, mentions légales, à-propos, équipe). Ces
@@ -131,12 +131,9 @@ def quick_scan_site(url, max_pages=None):
     def _scan_page(client, page_url):
         if page_url in visited or not same_domain(url, page_url) or not policy.allowed(page_url):
             return None
-        if not is_safe_url(page_url):
-            return None
         visited.add(page_url)
         try:
-            response = client.get(page_url)
-            assert_safe_response(response)
+            response = safe_get(client, page_url)
         except (httpx.HTTPError, UnsafeUrlError):
             return None
         if response.status_code >= 400 or "text/html" not in response.headers.get("content-type", ""):
@@ -207,7 +204,7 @@ def quick_scan_site(url, max_pages=None):
         result["pages"].append({"url": page_url, "path": path})
         return soup
 
-    with httpx.Client(headers=headers, timeout=12, follow_redirects=True) as client:
+    with httpx.Client(headers=headers, timeout=12) as client:
         # 1) page d'accueil toujours en premier.
         homepage_soup = _scan_page(client, url)
 

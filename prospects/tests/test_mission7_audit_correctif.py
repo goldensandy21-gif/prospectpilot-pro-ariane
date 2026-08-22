@@ -30,6 +30,7 @@ def _html_response(html, url):
     r.content = html.encode("utf-8")
     r.url = url
     r.history = []
+    r.iter_bytes = lambda: iter([r.content])
     return r
 
 
@@ -41,7 +42,21 @@ def _xml_response(content, url):
     r.text = content
     r.url = url
     r.history = []
+    r.iter_bytes = lambda: iter([r.content])
     return r
+
+
+class _StreamCtx:
+    """Audit correctif round 2, §2 — safe_get() lit via client.stream()."""
+
+    def __init__(self, response):
+        self.response = response
+
+    def __enter__(self):
+        return self.response
+
+    def __exit__(self, *args):
+        return False
 
 
 class FakeClient:
@@ -64,6 +79,12 @@ class FakeClient:
         raise httpx.HTTPError("not found")
 
     def head(self, url, *args, **kwargs):
+        raise httpx.HTTPError("not found")
+
+    def stream(self, method, url, **kwargs):
+        self.requested_urls.append(url)
+        if url in self.pages:
+            return _StreamCtx(self.pages[url])
         raise httpx.HTTPError("not found")
 
 

@@ -203,6 +203,66 @@ def split_person_from_email(email):
     return first, last, f"{first} {last}"
 
 
+def persist_public_email(prospect, email, source, source_url, confidence_hint=50, evidence_id=None):
+    """Audit correctif round 2, §4 — service canonique UNIQUE de persistance
+    d'un e-mail explicitement observé sur une page publique : quelle que soit
+    la porte d'entrée (enrichissement via CompanyWebsiteSource, ou Recherche
+    intelligente via acquisition_pipeline._finalize_candidate), un e-mail
+    professionnel produit la même sémantique (public_source_confirmed,
+    source_url, confiance) — jamais deux fonctions qui divergent.
+    classify_public_source_email() (email_intelligence.py) reste la seule
+    logique de format/niveau A. Import tardif : email_intelligence.py
+    importe depuis ce module."""
+    from .email_intelligence import classify_public_source_email
+
+    email = normalize_value(email)
+    if not email:
+        return None
+    check = classify_public_source_email(email)
+    obj, created = PublicEmail.objects.update_or_create(
+        prospect=prospect,
+        email=email,
+        defaults={
+            "email_type": check["email_type"],
+            "confidence_score": max(confidence_hint, check["confidence"]),
+            "verification_status": check["status"],
+            "source_name": source.name,
+            "source_url": source_url,
+            "source_type": "contact_page" if "contact" in source_url.lower() else "website",
+            "is_active": True,
+            "discovery_method": source.key,
+            "last_checked_at": timezone.now(),
+        },
+    )
+
+    best = prospect.public_emails.filter(is_primary=True).first()
+    if created or not best or obj.confidence_score >= best.confidence_score:
+        PublicEmail.objects.filter(prospect=prospect).update(is_primary=False)
+        obj.is_primary = True
+        obj.save(update_fields=["is_primary"])
+        prospect.public_email = obj.email
+        prospect.save(update_fields=["public_email", "updated_at"])
+
+    first, last, full = split_person_from_email(email)
+    if full:
+        ContactPerson.objects.update_or_create(
+            prospect=prospect,
+            email=email,
+            defaults={
+                "source": source,
+                "first_name": first,
+                "last_name": last,
+                "full_name": full,
+                "source_url": source_url,
+                "confidence_score": min(75, obj.confidence_score),
+                "verification_status": obj.verification_status,
+                "last_checked_at": timezone.now(),
+                "raw_payload": {"inferred_from_email": True, "evidence_id": evidence_id},
+            },
+        )
+    return obj
+
+
 class PublicRegistrySource:
     key = "public_registry"
 
@@ -247,12 +307,22 @@ class CompanyWebsiteSource:
         self.force_refresh = force_refresh
 
     def _recently_crawled(self, prospect):
+        # Audit correctif round 2, §3 — un run "done" qui n'a jamais exécuté
+        # company_website (ex. public_registry seul) ne doit jamais bloquer
+        # un crawl ; et un run "done" pour un ANCIEN site (prospect.website a
+        # changé depuis) ne doit jamais bloquer le crawl du NOUVEAU site.
+        # Filtré en Python (pas de lookup JSON __contains, cross-backend
+        # SQLite/Postgres plus prévisible pour une poignée de lignes).
         if self.force_refresh:
             return False
         cutoff = timezone.now() - timezone.timedelta(
             minutes=getattr(settings, "WEB_ENRICHMENT_COOLDOWN_MINUTES", 60)
         )
-        return prospect.enrichment_runs.filter(status="done", finished_at__gte=cutoff).exists()
+        recent_runs = prospect.enrichment_runs.filter(status="done", finished_at__gte=cutoff)
+        return any(
+            self.key in (run.sources_completed or []) and (run.query or {}).get("website") == prospect.website
+            for run in recent_runs
+        )
 
     def collect(self, prospect):
         candidates = []
@@ -536,8 +606,14 @@ class EnrichmentEngine:
             run.status = "done"
             run.sources_completed = completed
             run.totals = totals
+            # Audit correctif round 2, §3 — mémorise le site réellement
+            # associé au prospect à la fin de ce run : permet au cooldown
+            # (CompanyWebsiteSource._recently_crawled) de détecter un
+            # changement de domaine et d'autoriser immédiatement un nouveau
+            # crawl dans ce cas.
+            run.query = {**(run.query or {}), "website": prospect.website}
             run.finished_at = timezone.now()
-            run.save(update_fields=["status", "sources_completed", "totals", "finished_at"])
+            run.save(update_fields=["status", "sources_completed", "totals", "query", "finished_at"])
             return run
         except Exception as exc:
             run.status = "failed"
@@ -618,58 +694,10 @@ class EnrichmentEngine:
         return evidence
 
     def store_email(self, prospect, source, candidate, evidence):
-        # Audit correctif §4 — Email Finder niveau A : un e-mail passant par
-        # ce chemin a été explicitement observé sur une page publique
-        # (CompanyWebsiteSource est le seul appelant réel de store_email()) ;
-        # classify_public_source_email() reclasse donc "format_valid" en
-        # "public_source_confirmed" — jamais une deuxième logique de format,
-        # elle appelle verify_email() en interne. Un domaine gratuit reste
-        # "deliverability_unknown" (sémantique déjà correcte, inchangée).
-        # Import tardif : email_intelligence.py importe depuis ce module.
-        from .email_intelligence import classify_public_source_email
-        email = normalize_value(candidate.value)
-        check = classify_public_source_email(email)
-        obj, created = PublicEmail.objects.update_or_create(
-            prospect=prospect,
-            email=email,
-            defaults={
-                "email_type": check["email_type"],
-                "confidence_score": max(candidate.confidence_score, check["confidence"]),
-                "verification_status": check["status"],
-                "source_name": source.name,
-                "source_url": candidate.source_url,
-                "source_type": "contact_page" if "contact" in candidate.source_url.lower() else "website",
-                "is_active": True,
-                "discovery_method": source.key,
-                "last_checked_at": timezone.now(),
-            },
+        persist_public_email(
+            prospect, candidate.value, source, candidate.source_url,
+            confidence_hint=candidate.confidence_score, evidence_id=evidence.pk,
         )
-
-        best = prospect.public_emails.filter(is_primary=True).first()
-        if created or not best or obj.confidence_score >= best.confidence_score:
-            PublicEmail.objects.filter(prospect=prospect).update(is_primary=False)
-            obj.is_primary = True
-            obj.save(update_fields=["is_primary"])
-            prospect.public_email = obj.email
-            prospect.save(update_fields=["public_email", "updated_at"])
-
-        first, last, full = split_person_from_email(email)
-        if full:
-            ContactPerson.objects.update_or_create(
-                prospect=prospect,
-                email=email,
-                defaults={
-                    "source": source,
-                    "first_name": first,
-                    "last_name": last,
-                    "full_name": full,
-                    "source_url": candidate.source_url,
-                    "confidence_score": min(75, obj.confidence_score),
-                    "verification_status": obj.verification_status,
-                    "last_checked_at": timezone.now(),
-                    "raw_payload": {"inferred_from_email": True, "evidence_id": evidence.pk},
-                },
-            )
 
     def store_person(self, prospect, source, candidate):
         """Mission 7C — miroir de store_email()/store_phone() pour les

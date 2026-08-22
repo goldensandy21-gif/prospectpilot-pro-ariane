@@ -420,6 +420,16 @@ def audit_site_task(self, prospect_id, max_pages=None):
             page_phones = page.pop("found_phones", [])
             page_forms = page.pop("found_contact_forms", [])
             page_social_links = page.pop("found_social_links", [])
+            # Audit correctif round 2, §1 — analyze_html() (crawler.py) renvoie
+            # aussi found_people/found_temporal_events (mission 7C/7E) depuis
+            # cette même page ; PageAudit n'a pas ces champs et
+            # PageAudit.objects.create(**page) lèverait un TypeError sinon.
+            # L'audit technique multi-pages (SEO/perf) reste volontairement
+            # distinct du pipeline d'enrichissement/personnes : ces données ne
+            # sont pas persistées depuis ce chemin (elles le sont déjà via
+            # CompanyWebsiteSource/enrich_prospect — voir docs/WEB_DATA_INTELLIGENCE.md).
+            page.pop("found_people", None)
+            page.pop("found_temporal_events", None)
 
             found_emails.extend(page_emails)
             found_phones.extend(page_phones)

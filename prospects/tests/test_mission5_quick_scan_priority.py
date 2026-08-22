@@ -18,7 +18,23 @@ def _html_response(html, url):
     r.headers = {"content-type": "text/html; charset=utf-8"}
     r.url = url
     r.history = []
+    r.iter_bytes = lambda: iter([r.content])
     return r
+
+
+class _StreamCtx:
+    """Audit correctif round 2, §2 — safe_get() lit via client.stream(), plus
+    client.get() : ce petit adaptateur rejoue la même page à travers l'API
+    de streaming utilisée en production."""
+
+    def __init__(self, response):
+        self.response = response
+
+    def __enter__(self):
+        return self.response
+
+    def __exit__(self, *args):
+        return False
 
 
 class FakeClient:
@@ -38,6 +54,12 @@ class FakeClient:
         self.requested_urls.append(url)
         if url in self.pages:
             return _html_response(self.pages[url], url)
+        raise httpx.HTTPError("not found")
+
+    def stream(self, method, url, **kwargs):
+        self.requested_urls.append(url)
+        if url in self.pages:
+            return _StreamCtx(_html_response(self.pages[url], url))
         raise httpx.HTTPError("not found")
 
 

@@ -221,22 +221,27 @@ def _finalize_candidate(candidate, quick_data, technologies, prospect, icp, prod
     général, sauf réutilisation d'un scan récent (voir _process_candidate).
     """
     # --- contacts détectés lors du quick scan ------------------------------------
+    # Audit correctif round 2, §4 — persistance canonique unique
+    # (enrichment.persist_public_email), quelle que soit la porte d'entrée :
+    # même sémantique public_source_confirmed/confiance/source_url que le
+    # chemin Web Intelligence/enrichissement, jamais une deuxième logique.
+    # La préférence "adresse générique d'abord" (contact@ avant un prénom.nom@)
+    # pour l'e-mail PRINCIPAL du prospect est une règle métier propre à ce
+    # pipeline (hors périmètre de ce correctif) : conservée telle quelle,
+    # appliquée après la persistance canonique.
+    from .enrichment import persist_public_email, source_for
+
     found_emails = quick_data.get("found_emails", [])
     email_sources = quick_data.get("email_sources", {})
     generic = [e for e in found_emails if classify_email_type(e) == "generic"]
     best_email = (generic or found_emails or [""])[0]
-    for email in dict.fromkeys(found_emails):
-        PublicEmail.objects.update_or_create(
-            prospect=prospect, email=email,
-            defaults={
-                "email_type": classify_email_type(email),
-                "source_url": email_sources.get(email, candidate.site_url),
-                "source_type": "website", "is_primary": email == best_email,
-                "is_active": True, "discovery_method": "quick_scan",
-            },
-        )
+    if found_emails:
+        email_source = source_for("company_website")
+        for email in dict.fromkeys(found_emails):
+            persist_public_email(prospect, email, email_source, email_sources.get(email, candidate.site_url))
     if best_email:
         PublicEmail.objects.filter(prospect=prospect).exclude(email=best_email).update(is_primary=False)
+        PublicEmail.objects.filter(prospect=prospect, email=best_email).update(is_primary=True)
         prospect.public_email = best_email
         candidate.contact_email = best_email
 
