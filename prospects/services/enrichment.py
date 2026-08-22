@@ -431,6 +431,12 @@ class EnrichmentEngine:
                 completed.append(source_adapter.key)
 
             self.apply_best_values(prospect)
+            # Mission 7D, niveau B — propose un e-mail probable (jamais
+            # "vérifié") pour les personnes découvertes sans e-mail connu,
+            # seulement si un motif de domaine fiable existe déjà. Import
+            # tardif : email_intelligence.py importe depuis ce module.
+            from .email_intelligence import propose_inferred_emails_for_prospect
+            totals["emails_inferred"] = len(propose_inferred_emails_for_prospect(prospect))
             totals["emails"] = prospect.public_emails.count()
             totals["phones"] = prospect.public_phones.count()
             totals["contacts"] = prospect.contact_people.count()

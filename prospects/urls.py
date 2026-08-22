@@ -17,6 +17,7 @@ urlpatterns = [
     path("prospects/<int:pk>/audit/",views.start_audit,name="start_audit"),
     path("prospects/<int:pk>/commoncrawl/",views.start_commoncrawl,name="start_commoncrawl"),
     path("prospects/<int:pk>/enrich/",views.start_enrichment,name="start_enrichment"),
+    path("prospects/<int:pk>/emails/verify-mx/",views.verify_emails_mx,name="verify_emails_mx"),
     path("prospects/<int:pk>/report/pdf/",views.prospect_pdf_view,name="prospect_pdf"),
     path("prospects/<int:pk>/optout/",views.mark_optout,name="mark_optout"),
     path("search/",views.company_search,name="company_search"),

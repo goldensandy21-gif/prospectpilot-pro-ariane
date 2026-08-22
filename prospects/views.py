@@ -411,6 +411,7 @@ def prospect_detail(request, pk):
             "email_sends": email_sends,
             "contact_people": prospect.contact_people.all()[:20],
             "evidence_items": prospect.evidence_items.select_related("source")[:50],
+            "inferred_emails": prospect.evidence_items.filter(field_name="email_pattern_inferred", is_current=True),
             "enrichment_runs": prospect.enrichment_runs.all()[:5],
             # ETAPE 23 — Pourquoi prospecter cette entreprise ? (PredictNeed IA)
             "predictneed_signals": prospect.signals.all()[:20],
@@ -477,6 +478,23 @@ def start_enrichment(request, pk):
         request,
         f"Enrichissement multi-sources lancé. Tâche {task.id[:8]}.",
     )
+    return redirect("prospect_detail", pk=pk)
+
+
+@login_required
+def verify_emails_mx(request, pk):
+    """Mission 7D, niveau C — action explicite (jamais automatique) : vérifie
+    le MX du domaine des e-mails publics connus. Ne déclare jamais un e-mail
+    "vérifié" — seulement que son domaine peut recevoir du courrier."""
+    from .services.email_intelligence import upgrade_email_verification_with_mx
+
+    prospect = get_object_or_404(Prospect, pk=pk)
+    if request.method == "POST":
+        updated = upgrade_email_verification_with_mx(prospect)
+        if updated:
+            messages.success(request, f"{len(updated)} e-mail(s) confirmé(s) avec un domaine MX valide.")
+        else:
+            messages.info(request, "Aucun e-mail à mettre à jour (déjà vérifiés, ou aucun MX trouvé).")
     return redirect("prospect_detail", pk=pk)
 
 def _search_values(request):

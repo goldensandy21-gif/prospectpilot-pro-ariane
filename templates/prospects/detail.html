@@ -223,6 +223,7 @@
           {% for email in prospect.public_emails.all %}
             <li>
               {{ email.email }} · {{ email.get_email_type_display }}
+              · <span class="status-pill">{{ email.get_verification_status_display }}</span>
               {% if email.source_url %}
                 · <a href="{{ email.source_url }}" target="_blank">source</a>
               {% endif %}
@@ -231,6 +232,20 @@
             <li>Aucun email public enregistré.</li>
           {% endfor %}
         </ul>
+        {% if prospect.public_emails.exists %}
+          <form method="post" action="{% url 'verify_emails_mx' prospect.pk %}" class="mt-2">
+            {% csrf_token %}
+            <button class="btn btn-sm btn-outline-dark">Vérifier le domaine (MX)</button>
+          </form>
+        {% endif %}
+        {% if inferred_emails %}
+          <h3 class="mt-3">E-mails probables (motif de domaine, non confirmés)</h3>
+          <ul class="issue-list">
+            {% for evidence in inferred_emails %}
+              <li>{{ evidence.value }} — {{ evidence.raw_payload.contact_full_name|default:"" }} · <span class="status-pill status-warning">Motif déduit, non vérifié</span></li>
+            {% endfor %}
+          </ul>
+        {% endif %}
 
         <h3>Téléphones collectés</h3>
         <ul class="issue-list">
