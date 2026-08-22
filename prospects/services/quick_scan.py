@@ -16,6 +16,7 @@ from .crawler import (
     EMAIL_RE, PHONE_RE, analyze_contact_forms, clean_email, clean_phone,
     is_important_url, normalize_url, platform_for_url, same_domain,
 )
+from .people_extraction import extract_people_from_page
 from .robots import RobotsPolicy
 from .technology import detect_technologies, detect_technologies_detailed
 
@@ -104,6 +105,7 @@ def quick_scan_site(url, max_pages=None):
         "found_emails": [],
         "found_phones": [],
         "found_social_links": [],
+        "found_people": [],
         "email_sources": {},
         "pages": [],
         "worth_full_analysis": False,
@@ -121,6 +123,7 @@ def quick_scan_site(url, max_pages=None):
     found_emails = []
     found_phones = []
     found_social_links = []
+    found_people = []
     email_sources = {}
     visited = set()
 
@@ -165,6 +168,9 @@ def quick_scan_site(url, max_pages=None):
                     found_social_links.append({"platform": platform, "url": href, "source_url": page_url})
         for match in PHONE_RE.findall(text):
             found_phones.append(match.strip())
+
+        for person in extract_people_from_page(page_url, soup):
+            found_people.append({**person, "source_url": page_url})
 
         forms = analyze_contact_forms(soup, page_url)
         if forms:
@@ -230,6 +236,7 @@ def quick_scan_site(url, max_pages=None):
     result["found_emails"] = list(dict.fromkeys(e for e in found_emails if e))
     result["found_phones"] = list(dict.fromkeys(p for p in found_phones if p))
     result["found_social_links"] = list({link["url"]: link for link in found_social_links}.values())
+    result["found_people"] = list({p["full_name"].lower(): p for p in found_people}.values())
     result["email_sources"] = email_sources
     result["has_landing_pages"] = result["pages_checked"] >= 2 and result["has_pricing_page"] and result["has_services_page"]
 

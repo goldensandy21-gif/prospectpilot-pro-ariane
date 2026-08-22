@@ -317,6 +317,26 @@ class CompanyWebsiteSource:
                     raw_payload=link,
                 ))
 
+            # Mission 7C — People Discovery : personnes trouvées sur cette même
+            # page (schema.org Person, ou heuristique texte sur une page
+            # équipe reconnue), déjà extraites en un seul passage par
+            # analyze_html() — aucun deuxième crawl du site.
+            for person in page.get("found_people", []):
+                full_name = str(person.get("full_name") or "").strip()
+                if not full_name:
+                    continue
+                is_structured = person.get("method") == "json_ld_person"
+                candidates.append(EvidenceCandidate(
+                    field_name="person",
+                    value=full_name,
+                    value_type="person",
+                    confidence_score=80 if is_structured else 55,
+                    verification_status="public_source_confirmed" if is_structured else "format_valid",
+                    source_key=self.key,
+                    source_url=page_url,
+                    raw_payload=person,
+                ))
+
         return candidates
 
 
@@ -468,6 +488,8 @@ class EnrichmentEngine:
             self.store_email(prospect, source, candidate, evidence)
         elif candidate.value_type == "phone":
             self.store_phone(prospect, source, candidate, evidence)
+        elif candidate.value_type == "person":
+            self.store_person(prospect, source, candidate)
         elif candidate.field_name == "contact_form":
             PublicContactForm.objects.update_or_create(
                 prospect=prospect,
@@ -540,6 +562,34 @@ class EnrichmentEngine:
                     "raw_payload": {"inferred_from_email": True, "evidence_id": evidence.pk},
                 },
             )
+
+    def store_person(self, prospect, source, candidate):
+        """Mission 7C — miroir de store_email()/store_phone() pour les
+        personnes : dédup Entreprise + personne (nom, insensible à la casse),
+        confiance la plus haute gagne, ne remplace jamais un poste/profil déjà
+        connu par une valeur vide. N'écrit jamais si le nom est vide."""
+        full_name = str(candidate.value or "").strip()
+        if not full_name:
+            return None
+        payload = candidate.raw_payload or {}
+        existing = ContactPerson.objects.filter(prospect=prospect, full_name__iexact=full_name).first()
+        if existing and existing.confidence_score > candidate.confidence_score:
+            existing.last_checked_at = timezone.now()
+            existing.save(update_fields=["last_checked_at"])
+            return existing
+
+        obj = existing or ContactPerson(prospect=prospect, full_name=full_name)
+        obj.source = source
+        obj.job_title = str(payload.get("job_title") or "").strip() or obj.job_title
+        obj.profile_url = str(payload.get("profile_url") or "").strip() or obj.profile_url
+        obj.source_url = candidate.source_url
+        obj.confidence_score = candidate.confidence_score
+        obj.verification_status = candidate.verification_status
+        obj.raw_payload = payload
+        obj.is_active = True
+        obj.last_checked_at = timezone.now()
+        obj.save()
+        return obj
 
     def store_phone(self, prospect, source, candidate, evidence):
         phone = str(candidate.value).strip()

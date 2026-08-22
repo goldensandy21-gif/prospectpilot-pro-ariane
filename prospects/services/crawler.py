@@ -9,6 +9,7 @@ from lxml import etree
 from django.conf import settings
 from .robots import RobotsPolicy
 from .technology import detect_technologies
+from .people_extraction import extract_people_from_page
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 PHONE_RE = re.compile(r"(?:\+33|0)[1-9](?:[ .-]?\d{2}){4}")
@@ -171,6 +172,7 @@ def analyze_html(url, response, depth):
         "found_phones":found_phones,
         "found_contact_forms":contact_forms[:10],
         "found_social_links":social_links[:20],
+        "found_people":extract_people_from_page(url, soup),
         "technologies":detect_technologies(response.text, dict(response.headers)),
         "issues":issues,
         "_internal_urls":list(dict.fromkeys(internal)),
