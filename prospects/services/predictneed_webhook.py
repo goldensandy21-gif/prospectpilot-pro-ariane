@@ -19,6 +19,11 @@ CONVERSION_MAP = {
 STAGE_MAP = {
     "signup_completed": "signed_up",
     "subscription_activated": "paying",
+    # Correctif d'audit (round 3) : un client qui résilie doit sortir de
+    # l'état "paying" — sinon _hard_exclusion() (predictneed_scoring.py)
+    # continue à exclure un prospect qui n'est plus client, et rien ne
+    # distingue jamais un client actif d'un client parti.
+    "subscription_cancelled": "churned",
 }
 
 
@@ -66,22 +71,16 @@ def process_predictneed_event(payload):
         idempotency_key=idempotency_key or None, occurred_at=occurred_at,
     )
 
-    if prospect:
-        # Mission 6, section 15 : alerte sur un nouvel engagement PredictNeed
-        # réel, jamais un événement synthétique.
-        from .alerts import check_engagement_alert
-        check_engagement_alert(prospect, engagement)
-
-        # Correctif d'audit : recalcul temps réel — engagement_score ET la
-        # "Priorité" canonique doivent refléter immédiatement ce nouvel
-        # événement, sans attendre un prochain passage explicite du
-        # pipeline. score_prospect() ne fait que lire les événements/signaux
-        # existants (aucune écriture chez PredictNeed IA, aucune boucle).
-        from .predictneed_scoring import score_prospect
-        score_prospect(prospect)
-
     response = {"status": "ok", "engagement_event_id": engagement.pk}
 
+    # Correctif d'audit (round 3) : l'ordre transactionnel compte.
+    # predictneed_stage doit être définitivement à jour AVANT tout appel à
+    # score_prospect() — sinon _hard_exclusion() (predictneed_scoring.py),
+    # qui exclut un prospect dont predictneed_stage == "paying", ne voit pas
+    # encore le nouvel état lors d'un subscription_activated et calcule un
+    # score normal au lieu de l'exclusion attendue. score_prospect() est
+    # donc appelé en tout dernier, une fois campaign_prospect/predictneed_stage/
+    # ConversionEvent/RevenueAttribution tous à jour.
     if campaign_prospect:
         campaign_prospect.last_engagement_at = timezone.now()
         new_status = STAGE_MAP.get(event_type)
@@ -125,5 +124,21 @@ def process_predictneed_event(payload):
                 attributed_at=occurred_at,
             )
             response["revenue_attribution_id"] = attribution.pk
+        # Correctif d'audit (round 3) : une résiliation (ConversionEvent
+        # "cancelled") ne touche JAMAIS à un RevenueAttribution existant —
+        # aucune suppression, aucune réécriture ici. L'historique de revenu
+        # réellement généré reste intact quel que soit ce qui se passe après.
+
+    if prospect:
+        # Mission 6, section 15 : alerte sur un nouvel engagement PredictNeed
+        # réel, jamais un événement synthétique.
+        from .alerts import check_engagement_alert
+        check_engagement_alert(prospect, engagement)
+
+        # Recalcul temps réel — engagement_score ET la "Priorité" canonique
+        # reflètent immédiatement ce nouvel événement, avec predictneed_stage
+        # déjà à jour. Lecture seule côté PredictNeed : aucune boucle.
+        from .predictneed_scoring import score_prospect
+        score_prospect(prospect)
 
     return 200, response

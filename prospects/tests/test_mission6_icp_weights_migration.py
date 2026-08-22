@@ -1,6 +1,11 @@
-"""Mission 6 (correctif d'audit, round 2) — migration explicite et
+"""Mission 6 (correctif d'audit, rounds 2 et 3) — migration explicite et
 déterministe des poids ICP existants, jamais une fusion+renormalisation
-silencieuse, et jamais un écrasement d'un profil réellement personnalisé."""
+silencieuse, et jamais un écrasement d'un profil réellement personnalisé.
+
+Trois cas distincts (round 3) : Cas A (anciens défauts exacts -> nouveaux
+défauts exacts, pas un rescale générique), Cas B (profil personnalisé ->
+proportions relatives conservées dans 75% pile, somme exacte via la méthode
+du plus grand reste), Cas C (vide -> laissé vide)."""
 from importlib import import_module
 
 from django.apps import apps as django_apps
@@ -17,15 +22,10 @@ class _FakeSchemaEditor:
         self.connection = connection
 
 
-class IcpWeightsBackfillTests(TestCase):
-    def test_empty_weights_are_left_untouched(self):
-        product = make_product()
-        icp = make_icp(product, weights={})
-        migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
-        icp.refresh_from_db()
-        self.assertEqual(icp.weights, {})
+class IcpWeightsBackfillCaseATests(TestCase):
+    """Cas A : weights == anciens défauts exacts (30/25/20/15/10)."""
 
-    def test_exact_legacy_default_weights_are_rescaled_to_75_percent_envelope(self):
+    def test_maps_exactly_to_the_new_default_weights(self):
         product = make_product()
         icp = make_icp(product, weights={
             "icp_fit": 30, "need": 25, "acquisition_maturity": 20, "contactability": 15, "timing": 10,
@@ -33,16 +33,15 @@ class IcpWeightsBackfillTests(TestCase):
         migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
         icp.refresh_from_db()
 
-        self.assertEqual(icp.weights["intent"], 15)
-        self.assertEqual(icp.weights["engagement"], 10)
-        legacy_sum = sum(icp.weights[k] for k in ["icp_fit", "need", "acquisition_maturity", "contactability", "timing"])
-        self.assertAlmostEqual(legacy_sum, 75, delta=1)
-        # Les proportions RELATIVES entre les 5 poids historiques sont conservées :
-        # icp_fit (30/100) doit rester le plus élevé, need (25/100) le deuxième, etc.
-        self.assertGreater(icp.weights["icp_fit"], icp.weights["need"])
-        self.assertGreater(icp.weights["need"], icp.weights["acquisition_maturity"])
-        self.assertGreaterEqual(icp.weights["acquisition_maturity"], icp.weights["contactability"])
-        self.assertGreater(icp.weights["contactability"], icp.weights["timing"])
+        self.assertEqual(icp.weights, {
+            "icp_fit": 25, "need": 15, "acquisition_maturity": 15,
+            "contactability": 15, "timing": 5, "intent": 15, "engagement": 10,
+        })
+        self.assertEqual(sum(icp.weights.values()), 100)
+
+
+class IcpWeightsBackfillCaseBTests(TestCase):
+    """Cas B : profil réellement personnalisé (différent des anciens défauts)."""
 
     def test_a_genuinely_personalized_profile_keeps_its_emphasis(self):
         """Un profil qui avait mis l'accent sur icp_fit (50%) doit continuer
@@ -53,30 +52,34 @@ class IcpWeightsBackfillTests(TestCase):
         })
         migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
         icp.refresh_from_db()
-
-        # icp_fit doit rester très largement le premier poste, loin devant need.
         self.assertGreater(icp.weights["icp_fit"], icp.weights["need"] * 3)
 
-    def test_effective_weights_always_sums_to_100_after_migration(self):
+    def test_writes_a_total_of_exactly_100_not_approximately(self):
         product = make_product()
         icp = make_icp(product, weights={
-            "icp_fit": 30, "need": 25, "acquisition_maturity": 20, "contactability": 15, "timing": 10,
+            "icp_fit": 50, "need": 10, "acquisition_maturity": 20, "contactability": 15, "timing": 5,
         })
         migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
         icp.refresh_from_db()
-        total = sum(icp.effective_weights().values())
-        self.assertAlmostEqual(total, 100, delta=1)
+        self.assertEqual(sum(icp.weights.values()), 100)  # exact, pas +-1
 
-    def test_already_migrated_profile_is_left_untouched(self):
+    def test_various_odd_legacy_splits_always_sum_to_exactly_100(self):
+        """La méthode du plus grand reste doit garantir une somme exacte
+        quelle que soit la répartition, y compris des cas qui génèrent des
+        restes de division difficiles (33/33/34/... etc.)."""
         product = make_product()
-        icp = make_icp(product, weights={
-            "icp_fit": 20, "need": 12, "acquisition_maturity": 12, "contactability": 12,
-            "timing": 4, "intent": 25, "engagement": 15,
-        })
-        original = dict(icp.weights)
-        migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
-        icp.refresh_from_db()
-        self.assertEqual(icp.weights, original)
+        odd_splits = [
+            {"icp_fit": 33, "need": 33, "acquisition_maturity": 34, "contactability": 0, "timing": 0},
+            {"icp_fit": 1, "need": 1, "acquisition_maturity": 1, "contactability": 1, "timing": 96},
+            {"icp_fit": 20, "need": 20, "acquisition_maturity": 20, "contactability": 20, "timing": 20},
+        ]
+        for i, weights in enumerate(odd_splits):
+            icp = make_icp(product, name=f"ICP odd {i}", weights=dict(weights))
+            migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
+            icp.refresh_from_db()
+            self.assertEqual(sum(icp.weights.values()), 100, f"split={weights}")
+            legacy_sum = sum(icp.weights[k] for k in ["icp_fit", "need", "acquisition_maturity", "contactability", "timing"])
+            self.assertEqual(legacy_sum, 75, f"split={weights}")
 
     def test_partial_legacy_weights_fill_missing_keys_from_old_defaults_not_new_ones(self):
         """Un profil qui n'avait personnalisé QUE icp_fit doit voir les
@@ -89,5 +92,48 @@ class IcpWeightsBackfillTests(TestCase):
         icp.refresh_from_db()
         self.assertIn("intent", icp.weights)
         self.assertIn("engagement", icp.weights)
-        legacy_sum = sum(icp.weights[k] for k in ["icp_fit", "need", "acquisition_maturity", "contactability", "timing"])
-        self.assertAlmostEqual(legacy_sum, 75, delta=1)
+        self.assertEqual(sum(icp.weights.values()), 100)
+
+
+class IcpWeightsBackfillCaseCTests(TestCase):
+    """Cas C : weights vide -> laissé vide, DEFAULT_ICP_WEIGHTS s'applique."""
+
+    def test_empty_weights_are_left_untouched(self):
+        product = make_product()
+        icp = make_icp(product, weights={})
+        migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
+        icp.refresh_from_db()
+        self.assertEqual(icp.weights, {})
+
+    def test_effective_weights_sums_to_100_for_an_untouched_empty_profile(self):
+        product = make_product()
+        icp = make_icp(product, weights={})
+        migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
+        icp.refresh_from_db()
+        self.assertEqual(sum(icp.effective_weights().values()), 100)
+
+
+class IcpWeightsBackfillIdempotencyTests(TestCase):
+    def test_already_migrated_profile_is_left_untouched(self):
+        product = make_product()
+        icp = make_icp(product, weights={
+            "icp_fit": 20, "need": 12, "acquisition_maturity": 12, "contactability": 12,
+            "timing": 4, "intent": 25, "engagement": 15,
+        })
+        original = dict(icp.weights)
+        migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
+        icp.refresh_from_db()
+        self.assertEqual(icp.weights, original)
+
+    def test_running_the_migration_twice_is_a_no_op_the_second_time(self):
+        product = make_product()
+        icp = make_icp(product, weights={
+            "icp_fit": 30, "need": 25, "acquisition_maturity": 20, "contactability": 15, "timing": 10,
+        })
+        migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
+        icp.refresh_from_db()
+        first_pass = dict(icp.weights)
+
+        migration_0013.backfill_icp_weights(django_apps, _FakeSchemaEditor())
+        icp.refresh_from_db()
+        self.assertEqual(icp.weights, first_pass)

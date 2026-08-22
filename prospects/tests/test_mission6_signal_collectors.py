@@ -152,10 +152,13 @@ class QuickScanSignalCollectorTests(TestCase):
             self.assertEqual(signal.signal_group, "fit")
 
 
-def _audit_summary(prospect, technologies, created_at):
+def _audit_summary(prospect, technologies, created_at, status="done", pages_crawled=5, start_url=None):
     from prospects.models import CrawlRun, SiteAuditSummary
 
-    run = CrawlRun.objects.create(prospect=prospect, start_url=prospect.website or "https://example.com", status="done")
+    run = CrawlRun.objects.create(
+        prospect=prospect, start_url=start_url or prospect.website or "https://example.com",
+        status=status, pages_crawled=pages_crawled,
+    )
     summary = SiteAuditSummary.objects.create(prospect=prospect, crawl_run=run, technologies=technologies)
     SiteAuditSummary.objects.filter(pk=summary.pk).update(created_at=created_at)
     return summary
@@ -203,6 +206,50 @@ class SiteChangeSignalCollectorTests(TestCase):
         prospect = make_prospect()
         _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=60))
         _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=1))
+        self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
+
+    def test_failed_previous_audit_is_never_used_as_proof_of_absence(self):
+        """Correctif d'audit (round 3) : un CrawlRun en échec ne prouve rien
+        — il peut s'être arrêté avant même de voir la page qui porte la
+        technologie. Jamais utilisé comme preuve d'absence."""
+        now = timezone.now()
+        prospect = make_prospect()
+        _audit_summary(prospect, ["Google Analytics"], now - timedelta(days=30), status="failed")
+        _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=1))
+        self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
+
+    def test_failed_current_audit_is_never_used_as_proof_of_presence(self):
+        now = timezone.now()
+        prospect = make_prospect()
+        _audit_summary(prospect, ["Google Analytics"], now - timedelta(days=30))
+        _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=1), status="failed")
+        self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
+
+    def test_radically_different_coverage_produces_no_signal(self):
+        """Comparer un scan de 2 pages à un scan de 40 pages ne prouve rien :
+        une technologie "absente" du petit scan peut simplement ne jamais
+        avoir été vue, pas avoir disparu du site."""
+        now = timezone.now()
+        prospect = make_prospect()
+        _audit_summary(prospect, ["Google Analytics"], now - timedelta(days=30), pages_crawled=2)
+        _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=1), pages_crawled=40)
+        self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
+
+    def test_comparable_coverage_still_produces_a_signal(self):
+        now = timezone.now()
+        prospect = make_prospect()
+        _audit_summary(prospect, ["Google Analytics"], now - timedelta(days=30), pages_crawled=8)
+        _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=1), pages_crawled=10)
+        signals = SiteChangeSignalCollector().collect(prospect)
+        self.assertEqual(len(signals), 1)
+
+    def test_different_start_url_produces_no_signal(self):
+        """Deux audits sur des URLs de départ différentes ne sont pas
+        comparables (site différent ou changement de domaine principal)."""
+        now = timezone.now()
+        prospect = make_prospect()
+        _audit_summary(prospect, ["Google Analytics"], now - timedelta(days=30), start_url="https://ancien-domaine.example")
+        _audit_summary(prospect, ["Google Analytics", "HubSpot"], now - timedelta(days=1), start_url="https://nouveau-domaine.example")
         self.assertEqual(SiteChangeSignalCollector().collect(prospect), [])
 
     def test_only_compares_the_two_most_recent_audits(self):

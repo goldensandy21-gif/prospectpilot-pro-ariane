@@ -1,4 +1,6 @@
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
@@ -492,3 +494,73 @@ class LinkedInProviderFailureTests(TestCase):
             advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(minutes=offset), linkedin_provider=provider)
         failed_logs = ContactLog.objects.filter(campaign_prospect=self.cp, outcome="invitation_failed")
         self.assertEqual(failed_logs.count(), 3)  # chaque tentative reste tracée pour audit humain
+
+
+class EmailStepOutcomeHandlingTests(TestCase):
+    """Correctif d'audit (round 3) : _execute_step ne doit jamais appeler
+    _mark_step_done aveuglément après l'e-mail — le comportement dépend de
+    record.status (sent/failed/suppressed/blocked)."""
+
+    def setUp(self):
+        self.product = make_product()
+        self.icp = make_icp(self.product)
+        self.campaign = _validated_campaign(self.product, self.icp)
+        self.sequence = EmailSequence.objects.create(product=self.product, name="Email seul")
+        self.email_step = EmailStep.objects.create(sequence=self.sequence, order=1, delay_days=0, channel="email", name="Premier contact")
+        EmailVariant.objects.create(step=self.email_step, name="V1", subject_template="{{ company_name }}")
+        self.campaign.sequence = self.sequence
+        self.campaign.save(update_fields=["sequence"])
+        self.prospect = make_prospect()
+        make_public_email(self.prospect)
+        self.cp = make_campaign_prospect(self.campaign, self.prospect)
+        self.now = timezone.now()
+
+    def _patched(self, status, error=""):
+        return patch(
+            "prospects.services.campaign_sequencing.send_predictneed_campaign_email",
+            return_value=SimpleNamespace(status=status, error=error),
+        )
+
+    def test_sent_advances_the_step(self):
+        with self._patched("sent"):
+            result = advance_campaign_prospect(self.cp.pk, now=self.now)
+        self.assertEqual(result["action"], "email")
+        self.cp.refresh_from_db()
+        self.assertEqual(self.cp.current_step_id, self.email_step.pk)
+
+    def test_failed_does_not_advance_and_keeps_the_error(self):
+        with self._patched("failed", error="Erreur SMTP simulée"):
+            result = advance_campaign_prospect(self.cp.pk, now=self.now)
+        self.assertEqual(result["action"], "email_failed")
+        self.assertEqual(result["error"], "Erreur SMTP simulée")
+        self.cp.refresh_from_db()
+        self.assertIsNone(self.cp.current_step)
+
+    def test_failed_then_retry_can_succeed(self):
+        with self._patched("failed", error="Erreur SMTP simulée"):
+            advance_campaign_prospect(self.cp.pk, now=self.now)
+        with self._patched("sent"):
+            result = advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(minutes=5))
+        self.assertEqual(result["action"], "email")
+        self.cp.refresh_from_db()
+        self.assertEqual(self.cp.current_step_id, self.email_step.pk)
+
+    def test_blocked_does_not_advance_and_exposes_a_reason(self):
+        with self._patched("blocked", error="Adresse destinataire manquante."):
+            result = advance_campaign_prospect(self.cp.pk, now=self.now)
+        self.assertEqual(result["action"], "email_blocked")
+        self.assertEqual(result["error"], "Adresse destinataire manquante.")
+        self.cp.refresh_from_db()
+        self.assertIsNone(self.cp.current_step)
+
+    def test_suppressed_stops_the_sequence_and_marks_dnc(self):
+        with self._patched("suppressed", error="Opposition détectée juste avant l'envoi."):
+            result = advance_campaign_prospect(self.cp.pk, now=self.now)
+        self.assertEqual(result["action"], "email_suppressed")
+        self.cp.refresh_from_db()
+        self.assertEqual(self.cp.status, "do_not_contact")
+        self.assertIsNone(self.cp.current_step)
+
+        # Un nouvel appel doit maintenant être bloqué par _stop_reason (DNC).
+        result2 = advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(days=1))
+        self.assertEqual(result2["action"], "stopped")

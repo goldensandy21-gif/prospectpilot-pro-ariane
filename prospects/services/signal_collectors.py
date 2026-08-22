@@ -166,20 +166,40 @@ class SiteChangeSignalCollector(SignalCollector):
     technologie n'est "nouvelle" QUE si elle est ABSENTE du snapshot
     précédent ET présente dans le snapshot actuel — une preuve à deux états
     comparables, pas une déduction. S'il n'existe pas deux audits distincts
-    pour ce prospect, aucun signal (silence plutôt qu'invention)."""
+    pour ce prospect, aucun signal (silence plutôt qu'invention).
+
+    Correctif d'audit (round 3) — comparaison stricte : ne compare que des
+    audits FIABLES. Un `CrawlRun` en échec (`status != "done"`) ne prouve
+    rien (le crawl peut s'être arrêté avant d'avoir vu la page qui porte la
+    technologie) — de tels audits sont exclus de la comparaison, jamais
+    utilisés comme preuve d'absence ou de présence. Les deux audits doivent
+    aussi porter sur le même site (`start_url` identique) et avoir une
+    couverture suffisamment comparable (`pages_crawled`, au moins
+    `MIN_COVERAGE_RATIO` du plus grand des deux) — comparer un scan de 2
+    pages à un scan de 40 pages ne prouve rien non plus. Hors de ces
+    conditions : aucun signal, jamais une confiance dégradée qui laisserait
+    croire à une preuve partielle."""
     name = "site_change"
     source_kind = "website"
+
+    MIN_COVERAGE_RATIO = 0.5
 
     def collect(self, prospect):
         from ..models import SiteAuditSummary
 
         summaries = list(
-            SiteAuditSummary.objects.filter(prospect=prospect).order_by("-created_at")[:2]
+            SiteAuditSummary.objects.filter(prospect=prospect, crawl_run__status="done")
+            .select_related("crawl_run").order_by("-created_at")[:2]
         )
         if len(summaries) < 2:
             return []
 
         current, previous = summaries
+        if current.crawl_run.start_url != previous.crawl_run.start_url:
+            return []
+        if not self._comparable_coverage(current.crawl_run, previous.crawl_run):
+            return []
+
         newly_appeared = sorted(set(current.technologies or []) - set(previous.technologies or []))
         if not newly_appeared:
             return []
@@ -198,6 +218,12 @@ class SiteChangeSignalCollector(SignalCollector):
                 source_kind=self.source_kind, signal_group="intent", observed_at=current.created_at,
             ))
         return signals
+
+    def _comparable_coverage(self, current_run, previous_run):
+        a, b = current_run.pages_crawled, previous_run.pages_crawled
+        if a == 0 or b == 0:
+            return False
+        return min(a, b) / max(a, b) >= self.MIN_COVERAGE_RATIO
 
 
 class RecentActivitySignalCollector(SignalCollector):

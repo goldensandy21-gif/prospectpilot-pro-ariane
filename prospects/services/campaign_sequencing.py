@@ -85,11 +85,18 @@ def _stop_reason(campaign_prospect):
         return "Prospect marqué « Ne plus contacter »."
     if prospect.predictneed_stage == "paying":
         return "Déjà client payant."
+    if prospect.predictneed_stage == "churned":
+        # Correctif d'audit (round 3) : une séquence active devient obsolète
+        # dès la résiliation — repartir sur une reconquête (NURTURE) est une
+        # décision humaine, jamais la continuation automatique de la
+        # séquence en cours (qui référencerait un abonnement qui n'existe
+        # plus). Ne bloque jamais de futures campagnes de reconquête.
+        return "Client parti (résiliation) — séquence arrêtée, reconquête à retravailler manuellement."
     if Suppression.objects.filter(active=True, prospect=prospect).exists():
         return "Prospect en liste d'opposition."
     if prospect.public_email and Suppression.objects.filter(active=True, email__iexact=prospect.public_email).exists():
         return "Adresse e-mail en liste d'opposition."
-    if campaign_prospect.status in ("do_not_contact", "lost", "paying"):
+    if campaign_prospect.status in ("do_not_contact", "lost", "paying", "churned"):
         return f"Statut campagne « {campaign_prospect.get_status_display()} »."
 
     if sequence and sequence.stop_on_reply:
@@ -184,7 +191,7 @@ def advance_campaign_prospect(campaign_prospect_id, now=None, linkedin_provider=
 
         reason = _stop_reason(campaign_prospect)
         if reason:
-            if campaign_prospect.status not in ("do_not_contact", "lost", "paying"):
+            if campaign_prospect.status not in ("do_not_contact", "lost", "paying", "churned"):
                 campaign_prospect.status = "do_not_contact" if "opposition" in reason.lower() or "ne plus contacter" in reason.lower() else campaign_prospect.status
                 campaign_prospect.excluded_reason = reason
                 campaign_prospect.save(update_fields=["status", "excluded_reason", "updated_at"])
@@ -280,9 +287,36 @@ def _execute_step(campaign_prospect, step, now, linkedin_provider):
         if not variant or not prospect.public_email:
             _mark_step_done(campaign_prospect, step, now)
             return {"action": "skipped_no_email", "step": step.name}
+
         record = send_predictneed_campaign_email(campaign_prospect, email_step=step, email_variant=variant)
-        _mark_step_done(campaign_prospect, step, now)
-        return {"action": "email", "outcome": record.status, "step": step.name}
+
+        # Correctif d'audit (round 3) : ne jamais avancer l'étape comme si
+        # l'e-mail avait été envoyé quand ce n'est pas le cas.
+        if record.status == "sent":
+            _mark_step_done(campaign_prospect, step, now)
+            return {"action": "email", "outcome": record.status, "step": step.name}
+
+        if record.status == "suppressed":
+            # Opposition détectée juste avant l'envoi (re-vérification dans
+            # send_predictneed_campaign_email) : arrêt de la séquence / DNC,
+            # même logique que _stop_reason() pour une opposition.
+            campaign_prospect.status = "do_not_contact"
+            campaign_prospect.excluded_reason = "Opposition détectée juste avant l'envoi (e-mail)."
+            campaign_prospect.save(update_fields=["status", "excluded_reason", "updated_at"])
+            return {"action": "email_suppressed", "outcome": record.status, "step": step.name}
+
+        if record.status == "blocked":
+            # Aucune adresse exploitable au moment de l'envoi (raison déjà
+            # posée par send_predictneed_campaign_email) — n'avance pas,
+            # raison exploitable renvoyée, mais pas un échec technique
+            # "retryable" au sens strict (rien ne changera sans nouvelle
+            # donnée de contact).
+            return {"action": "email_blocked", "outcome": record.status, "step": step.name, "error": record.error}
+
+        # "failed" (échec SMTP) ou tout autre statut inattendu : jamais
+        # traité comme un succès. N'avance pas current_step — reste
+        # rejouable au prochain appel (retry), erreur conservée sur l'EmailSend.
+        return {"action": "email_failed", "outcome": record.status, "step": step.name, "error": record.error}
 
     _mark_step_done(campaign_prospect, step, now)
     return {"action": "unknown_channel", "step": step.name}
@@ -295,7 +329,7 @@ def run_campaign_sequences(campaign, limit=None, now=None, linkedin_provider=Non
     initiale reste gérée ailleurs (validation de campagne)."""
     now = now or timezone.now()
     candidates = campaign.campaign_prospects.exclude(
-        status__in=["do_not_contact", "lost", "paying", "excluded"],
+        status__in=["do_not_contact", "lost", "paying", "excluded", "churned"],
     ).order_by("-acquisition_score_snapshot")
     if limit:
         candidates = candidates[:limit]

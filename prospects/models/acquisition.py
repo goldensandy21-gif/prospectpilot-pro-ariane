@@ -124,7 +124,7 @@ class ICPProfile(models.Model):
     excluded_domains = models.JSONField(default=list, blank=True)
     excluded_sectors = models.JSONField(default=list, blank=True)
 
-    weights = models.JSONField(default=dict, blank=True, help_text="Pondération icp_fit/need/acquisition_maturity/contactability/timing (somme=100).")
+    weights = models.JSONField(default=dict, blank=True, help_text="Pondération icp_fit/need/acquisition_maturity/contactability/timing/intent/engagement (somme=100). Vide = valeurs par défaut (DEFAULT_ICP_WEIGHTS).")
     minimum_outbound_score = models.PositiveSmallIntegerField(default=50)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -585,6 +585,9 @@ class CampaignProspect(models.Model):
         ("signed_up", "Inscrit"),
         ("activated", "Activé"),
         ("paying", "Client payant"),
+        # Correctif d'audit (round 3) — même état que Prospect.predictneed_stage,
+        # voir services/predictneed_webhook.py.
+        ("churned", "Client perdu (résiliation)"),
         ("nurture", "Nurture"),
         ("lost", "Perdu"),
         ("do_not_contact", "Ne plus contacter"),

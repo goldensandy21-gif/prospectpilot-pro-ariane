@@ -551,17 +551,6 @@ def audit_site_task(self, prospect_id, max_pages=None):
             prospect=prospect, crawl_run=run, **summary_data, **speed
         )
 
-        # Correctif d'audit (Mission 6) : chaque nouvel audit devient un
-        # instantané comparable au précédent — dès qu'un deuxième audit
-        # existe pour ce prospect, une technologie réellement apparue entre
-        # les deux devient un vrai signal INTENT daté. Isolé (jamais
-        # bloquant) : un échec ici ne doit jamais faire échouer l'audit.
-        try:
-            from .services.signal_collectors import SiteChangeSignalCollector, run_signal_collectors
-            run_signal_collectors(prospect, collectors=[SiteChangeSignalCollector()])
-        except Exception:
-            pass
-
         tech, commercial, fit, priority, reasons = calculate_scores(prospect, summary, page_objects)
         prospect.technical_score = tech
         prospect.commercial_score = commercial
@@ -575,6 +564,20 @@ def audit_site_task(self, prospect_id, max_pages=None):
         run.pages_crawled = len(page_objects)
         run.finished_at = timezone.now()
         run.save()
+
+        # Correctif d'audit (round 2 puis 3) : chaque nouvel audit RÉUSSI
+        # devient un instantané comparable au précédent — appelé seulement
+        # maintenant, une fois run.status="done" et run.pages_crawled
+        # définitivement posés (SiteChangeSignalCollector filtre sur
+        # crawl_run__status="done" et compare la couverture pages_crawled —
+        # les deux seraient faux/à zéro s'il était appelé plus tôt). Isolé
+        # (jamais bloquant) : un échec ici ne doit jamais faire échouer l'audit.
+        try:
+            from .services.signal_collectors import SiteChangeSignalCollector, run_signal_collectors
+            run_signal_collectors(prospect, collectors=[SiteChangeSignalCollector()])
+        except Exception:
+            pass
+
         return {"run_id":run.pk,"pages":len(page_objects),"priority":priority}
     except Exception as exc:
         run.status = "failed"
@@ -594,7 +597,16 @@ def commoncrawl_presence_task(prospect_id):
 
 @shared_task
 def scheduled_refresh_top_prospects():
-    ids = list(Prospect.objects.filter(prospecting_allowed=True).exclude(website="").order_by("-priority_score").values_list("id",flat=True)[:50])
+    # Correctif d'audit (round 3) : dernier tri legacy encore en production —
+    # remplacé par le score canonique Mission 6. Exclut aussi les prospects
+    # déjà exclus commercialement (predictneed_excluded) : ré-auditer un
+    # prospect déjà écarté (opposition, déjà client...) ne sert à rien.
+    ids = list(
+        Prospect.objects.filter(prospecting_allowed=True, predictneed_excluded=False)
+        .exclude(website="")
+        .order_by("-predictneed_acquisition_score")
+        .values_list("id", flat=True)[:50]
+    )
     for prospect_id in ids:
         audit_site_task.delay(prospect_id)
     return len(ids)

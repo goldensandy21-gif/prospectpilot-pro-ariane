@@ -59,6 +59,17 @@ def compute_next_best_action(prospect, now=None):
     if exclusion_reason:
         return {"code": "STOP", "reason": exclusion_reason, "confidence": 100, "triggering_signal": ""}
 
+    # Correctif d'audit (round 3) : un client qui a résilié n'est PAS
+    # hard-exclu (voir predictneed_scoring._hard_exclusion, qui n'exclut que
+    # "paying") — c'est un candidat légitime à une reconquête (win-back),
+    # pas une prospection standard ni un arrêt définitif.
+    if prospect.predictneed_stage == "churned":
+        return {
+            "code": "NURTURE",
+            "reason": "Client parti (résiliation) — candidat à une reconquête (win-back), pas une prospection standard.",
+            "confidence": 60, "triggering_signal": "",
+        }
+
     last_log = prospect.contact_logs.order_by("-contacted_at").first()
 
     if last_log and last_log.outcome in FOLLOW_UP_OUTCOMES:

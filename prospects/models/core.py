@@ -112,6 +112,9 @@ class Prospect(models.Model):
         ("signed_up", "Inscrit"),
         ("activated", "Activé"),
         ("paying", "Client payant"),
+        # Correctif d'audit (round 3) : un client qui résilie n'était traduit
+        # par aucun état — le prospect restait "paying" indéfiniment.
+        ("churned", "Client perdu (résiliation)"),
         ("nurture", "Nurture"),
         ("lost", "Perdu"),
         ("do_not_contact", "Ne plus contacter"),
@@ -119,7 +122,11 @@ class Prospect(models.Model):
     predictneed_stage = models.CharField(max_length=20, choices=PREDICTNEED_STAGES, blank=True, db_index=True)
 
     class Meta:
-        ordering = ["-priority_score", "-updated_at"]
+        # Correctif d'audit (round 3) : tri par défaut sur le score canonique
+        # Mission 6, plus jamais l'ancien priority_score — élimine le risque
+        # qu'un futur queryset non trié retombe silencieusement sur le
+        # vieux score (voir aussi services/tasks.py::scheduled_refresh_top_prospects).
+        ordering = ["-predictneed_acquisition_score", "-updated_at"]
 
     def __str__(self):
         return self.name
