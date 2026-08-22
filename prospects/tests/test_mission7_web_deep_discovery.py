@@ -23,10 +23,12 @@ class FakePolicy:
         return self._sitemaps
 
 
-def _xml_response(content, status_code=200):
+def _xml_response(content, status_code=200, url="https://exemple.fr/sitemap.xml"):
     r = Mock(spec=httpx.Response)
     r.status_code = status_code
     r.content = content.encode("utf-8")
+    r.url = url
+    r.history = []
     return r
 
 
@@ -89,7 +91,7 @@ class SitemapUrlsTests(TestCase):
         </urlset>"""
         client = FakeXmlClient({
             "https://exemple.fr/sitemap.xml": _xml_response(index_xml),
-            "https://exemple.fr/sitemap-blog.xml": _xml_response(child_xml),
+            "https://exemple.fr/sitemap-blog.xml": _xml_response(child_xml, url="https://exemple.fr/sitemap-blog.xml"),
         })
         with patch.object(crawler.httpx, "Client", return_value=client):
             entries = crawler.sitemap_urls("https://exemple.fr", policy=FakePolicy())
@@ -131,7 +133,7 @@ class SitemapUrlsTests(TestCase):
         <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
           <url><loc>https://exemple.fr/custom-location</loc><lastmod>2026-08-01</lastmod></url>
         </urlset>"""
-        client = FakeXmlClient({"https://exemple.fr/custom/sitemap-xyz.xml": _xml_response(xml)})
+        client = FakeXmlClient({"https://exemple.fr/custom/sitemap-xyz.xml": _xml_response(xml, url="https://exemple.fr/custom/sitemap-xyz.xml")})
         with patch.object(crawler.httpx, "Client", return_value=client):
             entries = crawler.sitemap_urls(
                 "https://exemple.fr",
@@ -153,7 +155,7 @@ class StructuredDataJsonLdTests(TestCase):
         persons = structured_data.find_persons(blocks)
         self.assertEqual(persons, [{
             "full_name": "Julie Martin", "job_title": "Directrice Marketing",
-            "profile_url": "", "method": "json_ld_person",
+            "profile_url": "", "bio_url": "", "method": "json_ld_person",
         }])
 
     def test_extracts_employees_nested_in_an_organization(self):

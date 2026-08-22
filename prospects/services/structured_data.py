@@ -5,6 +5,7 @@ schema.org + balises meta de date) sur une page déjà téléchargée. Utilisé 
 déjà construit par l'appelant, jamais une deuxième récupération de page."""
 import json
 import re
+from urllib.parse import urlparse
 
 PERSON_TYPES = {"person"}
 ORGANIZATION_TYPES = {"organization", "corporation", "localbusiness"}
@@ -44,6 +45,37 @@ def extract_json_ld_blocks(soup):
     return blocks
 
 
+def _is_linkedin_url(url):
+    try:
+        host = urlparse(str(url)).netloc.lower().removeprefix("www.")
+    except ValueError:
+        return False
+    return host == "linkedin.com" or host.endswith(".linkedin.com")
+
+
+def _linkedin_url_from(node):
+    """Audit correctif §5 — Mission 6 traite ContactPerson.profile_url comme
+    un lien LinkedIn : ne renvoie donc une valeur ici QUE si c'est une vraie
+    URL linkedin.com (par hostname, jamais par position dans la liste).
+    `Person.url` seul (bio/page auteur) n'est JAMAIS LinkedIn par défaut."""
+    same_as = node.get("sameAs")
+    candidates = same_as if isinstance(same_as, list) else ([same_as] if same_as else [])
+    url = node.get("url")
+    if url and not isinstance(url, (list, dict)):
+        candidates = [*candidates, url]
+    for candidate in candidates:
+        if candidate and not isinstance(candidate, (list, dict)) and _is_linkedin_url(candidate):
+            return str(candidate).strip()
+    return ""
+
+
+def _bio_url_from(node):
+    """URL publique générique (site perso, page auteur...) — jamais assimilée
+    à LinkedIn, conservée séparément pour provenance (raw_payload)."""
+    url = node.get("url")
+    return str(url).strip() if url and not isinstance(url, (list, dict)) else ""
+
+
 def find_persons(json_ld_blocks):
     """Personnes déclarées explicitement en schema.org Person — directement,
     ou imbriquées sous `employee`/`founder`/`member` d'une Organization. Ne
@@ -60,8 +92,8 @@ def find_persons(json_ld_blocks):
         found.append({
             "full_name": name,
             "job_title": str(node.get("jobTitle") or "").strip(),
-            "profile_url": str(node.get("url") or node.get("sameAs") or "").strip()
-            if not isinstance(node.get("sameAs"), list) else str((node.get("sameAs") or [""])[0]),
+            "profile_url": _linkedin_url_from(node),
+            "bio_url": _bio_url_from(node),
             "method": "json_ld_person",
         })
 

@@ -114,6 +114,14 @@ def infer_domain_email_pattern(prospect, minimum_examples=2):
     votes = {}
     examples_by_pattern = {}
     for contact in prospect.contact_people.filter(is_active=True).exclude(email=""):
+        # Audit correctif §6 — un ContactPerson créé UNIQUEMENT en découpant
+        # l'adresse e-mail elle-même (split_person_from_email, enrichment.py)
+        # ne constitue pas une preuve indépendante du motif : "sales.europe@"
+        # ou "marketing.team@" produiraient sinon un "nom" qui matche le
+        # motif par construction (circularité). Exige un contact étayé
+        # autrement (schema.org, page équipe...).
+        if (contact.raw_payload or {}).get("inferred_from_email"):
+            continue
         if not contact.email.lower().endswith("@" + domain):
             continue
         first, last = _split_name(contact)

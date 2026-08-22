@@ -376,11 +376,11 @@ def scan_search_batch_contacts_task(self, values, user_id=None):
 
 
 @shared_task(bind=True)
-def enrich_prospect_task(self, prospect_id, source_keys=None, user_id=None):
+def enrich_prospect_task(self, prospect_id, source_keys=None, user_id=None, force_refresh=False):
     prospect = Prospect.objects.get(pk=prospect_id)
     owner = get_user_model().objects.filter(pk=user_id).first() if user_id else None
     create_external_source_records()
-    run = EnrichmentEngine(source_keys=source_keys).enrich_prospect(prospect, user=owner)
+    run = EnrichmentEngine(source_keys=source_keys, force_refresh=force_refresh).enrich_prospect(prospect, user=owner)
     return {"run_id": run.pk, "status": run.status, "totals": run.totals}
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=2)

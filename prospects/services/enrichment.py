@@ -240,6 +240,20 @@ class PublicRegistrySource:
 class CompanyWebsiteSource:
     key = "company_website"
 
+    def __init__(self, force_refresh=False):
+        # Audit correctif §8 — cooldown avant de relancer un crawl réseau
+        # complet pour ce même prospect ; force_refresh=True le contourne
+        # explicitement (jamais silencieusement).
+        self.force_refresh = force_refresh
+
+    def _recently_crawled(self, prospect):
+        if self.force_refresh:
+            return False
+        cutoff = timezone.now() - timezone.timedelta(
+            minutes=getattr(settings, "WEB_ENRICHMENT_COOLDOWN_MINUTES", 60)
+        )
+        return prospect.enrichment_runs.filter(status="done", finished_at__gte=cutoff).exists()
+
     def collect(self, prospect):
         candidates = []
         website = prospect.website
@@ -263,6 +277,12 @@ class CompanyWebsiteSource:
                 ))
 
         if not website:
+            return candidates
+
+        if self._recently_crawled(prospect):
+            # Un enrichissement a déjà réussi récemment pour ce prospect —
+            # réutilise les ProspectEvidence/PublicEmail/ContactPerson déjà
+            # persistés au lieu de relancer un crawl réseau identique.
             return candidates
 
         data = crawl_site(
@@ -441,8 +461,12 @@ DEFAULT_SOURCE_KEYS = ["public_registry", "company_website", "common_crawl"]
 
 
 class EnrichmentEngine:
-    def __init__(self, source_keys=None):
+    def __init__(self, source_keys=None, force_refresh=False):
         self.source_keys = source_keys or DEFAULT_SOURCE_KEYS
+        # Audit correctif §8 — jamais deux crawls réseau identiques pour le
+        # même prospect à quelques minutes d'écart (bulk enrich successifs) ;
+        # force_refresh=True le contourne explicitement.
+        self.force_refresh = force_refresh
 
     def sources(self):
         for key in self.source_keys:
@@ -450,7 +474,10 @@ class EnrichmentEngine:
             if not factory:
                 continue
             source_for(key)
-            yield factory()
+            if key == "company_website":
+                yield CompanyWebsiteSource(force_refresh=self.force_refresh)
+            else:
+                yield factory()
 
     def enrich_prospect(self, prospect, user=None):
         run = EnrichmentRun.objects.create(
@@ -483,6 +510,29 @@ class EnrichmentEngine:
             totals["emails"] = prospect.public_emails.count()
             totals["phones"] = prospect.public_phones.count()
             totals["contacts"] = prospect.contact_people.count()
+
+            # Audit correctif §2 — les ProspectEvidence fraîchement déposées
+            # (temporelles, personnes, réseaux sociaux) doivent être
+            # normalisées en ProspectSignal par les collecteurs concernés
+            # AVANT de rendre la main, jamais laissées à un appel manuel
+            # ultérieur. persist_signals() (signals.py) recalcule déjà
+            # intent_score/engagement_score/predictneed_acquisition_score
+            # dès qu'au moins un signal est sauvegardé — rien d'autre à faire
+            # ici. Scopé aux collecteurs qui lisent exactement ce que cet
+            # enrichissement vient de produire (temporel/décideurs/social) ;
+            # technologie et quick-scan restent gérés par leur propre
+            # pipeline (acquisition_pipeline.py) pour éviter une double
+            # dérivation redondante.
+            from .signal_collectors import (
+                DecisionMakerSignalCollector, RecentActivitySignalCollector,
+                SocialPresenceSignalCollector, run_signal_collectors,
+            )
+            saved_signals, signal_errors = run_signal_collectors(prospect, collectors=[
+                RecentActivitySignalCollector(),
+                DecisionMakerSignalCollector(),
+                SocialPresenceSignalCollector(),
+            ])
+            totals["signals"] = len(saved_signals)
             run.status = "done"
             run.sources_completed = completed
             run.totals = totals
@@ -568,8 +618,17 @@ class EnrichmentEngine:
         return evidence
 
     def store_email(self, prospect, source, candidate, evidence):
+        # Audit correctif §4 — Email Finder niveau A : un e-mail passant par
+        # ce chemin a été explicitement observé sur une page publique
+        # (CompanyWebsiteSource est le seul appelant réel de store_email()) ;
+        # classify_public_source_email() reclasse donc "format_valid" en
+        # "public_source_confirmed" — jamais une deuxième logique de format,
+        # elle appelle verify_email() en interne. Un domaine gratuit reste
+        # "deliverability_unknown" (sémantique déjà correcte, inchangée).
+        # Import tardif : email_intelligence.py importe depuis ce module.
+        from .email_intelligence import classify_public_source_email
         email = normalize_value(candidate.value)
-        check = verify_email(email)
+        check = classify_public_source_email(email)
         obj, created = PublicEmail.objects.update_or_create(
             prospect=prospect,
             email=email,

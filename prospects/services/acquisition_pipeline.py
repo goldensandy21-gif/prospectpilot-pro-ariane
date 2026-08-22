@@ -20,7 +20,7 @@ from .agent_brief import generate_agent_brief
 from .company_search import fetch_all_companies
 from .prescoring import preselect_top_candidates, registry_pre_score
 from .predictneed_scoring import score_prospect
-from .signal_collectors import SocialPresenceSignalCollector, run_signal_collectors
+from .signal_collectors import DecisionMakerSignalCollector, SocialPresenceSignalCollector, run_signal_collectors
 from .signals import (
     build_competitor_detections,
     build_signals_from_quick_scan,
@@ -252,6 +252,29 @@ def _finalize_candidate(candidate, quick_data, technologies, prospect, icp, prod
                 defaults={"platform": link.get("platform", "other"), "source_url": link.get("source_url", candidate.site_url), "is_active": True, "discovery_method": "quick_scan"},
             )
 
+    # Audit correctif §3 — quick_scan_site() produit déjà found_people
+    # (people_extraction.py), mais ce chemin d'acquisition l'ignorait
+    # jusqu'ici. Réutilise le MÊME service de stockage/déduplication que
+    # l'enrichissement (EnrichmentEngine.store_person -> ContactPerson),
+    # jamais une deuxième logique People.
+    if quick_data.get("found_people"):
+        from .enrichment import EnrichmentEngine, EvidenceCandidate, source_for
+        people_source = source_for("company_website")
+        engine = EnrichmentEngine()
+        for person in quick_data["found_people"]:
+            full_name = str(person.get("full_name") or "").strip()
+            if not full_name:
+                continue
+            is_structured = person.get("method") == "json_ld_person"
+            engine.store_person(prospect, people_source, EvidenceCandidate(
+                field_name="person", value=full_name, value_type="person",
+                confidence_score=80 if is_structured else 55,
+                verification_status="public_source_confirmed" if is_structured else "format_valid",
+                source_key="company_website",
+                source_url=person.get("source_url", candidate.site_url),
+                raw_payload=person,
+            ))
+
     prospect.website = candidate.site_url
     prospect.website_confidence = candidate.site_confidence
     prospect.predictneed_stage = "enriched"
@@ -268,7 +291,9 @@ def _finalize_candidate(candidate, quick_data, technologies, prospect, icp, prod
     # écrits ci-dessus (247-252) mais ne produisaient jusqu'ici aucun signal —
     # SocialPresenceSignalCollector comble ce manque sans dupliquer la détection
     # technologies/quick scan déjà faite juste au-dessus.
-    run_signal_collectors(prospect, collectors=[SocialPresenceSignalCollector()])
+    # Audit correctif §3 : idem pour les décideurs (ContactPerson) qui
+    # viennent d'être créés juste au-dessus depuis found_people.
+    run_signal_collectors(prospect, collectors=[SocialPresenceSignalCollector(), DecisionMakerSignalCollector()])
     persist_competitor_detections(prospect, build_competitor_detections(prospect, technologies, site_url=candidate.site_url))
 
     # --- score final + AgentBrief -------------------------------------------------

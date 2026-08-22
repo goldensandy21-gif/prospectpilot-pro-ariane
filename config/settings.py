@@ -100,6 +100,12 @@ ACQUISITION_QUICK_SCAN_PAGES = int(os.getenv("ACQUISITION_QUICK_SCAN_PAGES", "5"
 ACQUISITION_DOMAIN_DELAY_SECONDS = float(os.getenv("ACQUISITION_DOMAIN_DELAY_SECONDS", "1.0"))
 ACQUISITION_SITE_CACHE_HOURS = int(os.getenv("ACQUISITION_SITE_CACHE_HOURS", "72"))
 
+# Audit correctif Mission 7, §8 — cooldown avant de relancer un crawl réseau
+# complet pour le MÊME prospect (CompanyWebsiteSource) : évite plusieurs
+# crawls identiques lors de bulk enrich successifs rapprochés. Contournable
+# explicitement via force_refresh=True.
+WEB_ENRICHMENT_COOLDOWN_MINUTES = int(os.getenv("WEB_ENRICHMENT_COOLDOWN_MINUTES", "60"))
+
 # ETAPE 20 — API serveur-à-serveur ProspectPilot <-> PredictNeed IA
 PREDICTNEED_API_URL = os.getenv("PREDICTNEED_API_URL", "")
 PREDICTNEED_SHARED_SECRET = os.getenv("PREDICTNEED_SHARED_SECRET", "")

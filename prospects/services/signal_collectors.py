@@ -259,7 +259,20 @@ class RecentActivitySignalCollector(SignalCollector):
     FIELD_LABELS = {
         "job_posting_growth": "Recrutement Growth/Marketing/CRO récent",
         "news_acquisition": "Actualité récente liée acquisition/conversion/analytics",
-        "dated_content_published": "Nouveau contenu Growth/Marketing/CRO publié",
+        "dated_content_published": "Contenu éditorial récent (growth/marketing)",
+    }
+    # Audit correctif §7 — un article de blog SEO/SEA/marketing générique
+    # n'est PAS un signal d'intention d'achat : une agence publie ce genre de
+    # contenu en continu, que son besoin PredictNeed change ou non. Seuls un
+    # recrutement Growth/CRO daté ou une actualité stratégique réellement
+    # pertinente restent des signaux INTENT forts. `dated_content_published`
+    # devient un signal FIT/activité (maturité éditoriale), jamais Intent —
+    # donc jamais compté dans intent_score (voir intent_scoring.py, qui ne
+    # lit que signal_group="intent").
+    FIELD_CONFIG = {
+        "job_posting_growth": {"category": "timing", "signal_group": "intent", "score_impact": 10},
+        "news_acquisition": {"category": "timing", "signal_group": "intent", "score_impact": 10},
+        "dated_content_published": {"category": "growth", "signal_group": "fit", "score_impact": 3},
     }
 
     def collect(self, prospect):
@@ -275,13 +288,14 @@ class RecentActivitySignalCollector(SignalCollector):
             if timezone.is_naive(observed_at):
                 observed_at = timezone.make_aware(observed_at)
 
+            config = self.FIELD_CONFIG[evidence.field_name]
             signals.append(_signal(
-                prospect, f"activity_{evidence.field_name}", "timing",
+                prospect, f"activity_{evidence.field_name}", config["category"],
                 self.FIELD_LABELS[evidence.field_name],
                 value=evidence.value, source_url=evidence.source_url,
                 evidence=evidence.notes or evidence.value,
-                confidence=evidence.confidence_score, score_impact=10, positive=True,
-                source_kind=self.source_kind, signal_group="intent", observed_at=observed_at,
+                confidence=evidence.confidence_score, score_impact=config["score_impact"], positive=True,
+                source_kind=self.source_kind, signal_group=config["signal_group"], observed_at=observed_at,
             ))
         return signals
 

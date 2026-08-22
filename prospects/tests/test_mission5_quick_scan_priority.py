@@ -14,8 +14,10 @@ def _html_response(html, url):
     r = Mock(spec=httpx.Response)
     r.status_code = 200
     r.text = html
+    r.content = html.encode("utf-8")
     r.headers = {"content-type": "text/html; charset=utf-8"}
     r.url = url
+    r.history = []
     return r
 
 

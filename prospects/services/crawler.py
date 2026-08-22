@@ -12,6 +12,7 @@ from .technology import detect_technologies
 from .people_extraction import extract_people_from_page
 from .structured_data import extract_json_ld_blocks, find_dated_content, find_meta_published_time
 from .temporal_signals import classify_dated_fact
+from .url_safety import UnsafeUrlError, assert_safe_response, is_safe_url
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 PHONE_RE = re.compile(r"(?:\+33|0)[1-9](?:[ .-]?\d{2}){4}")
@@ -229,13 +230,17 @@ def analyze_html(url, response, depth):
 def check_links(client, urls, max_links=30):
     broken = 0
     for url in list(dict.fromkeys(urls))[:max_links]:
+        if not is_safe_url(url):
+            continue
         try:
             r = client.head(url, timeout=6, follow_redirects=True)
+            assert_safe_response(r)
             if r.status_code >= 400:
                 r = client.get(url, timeout=8, follow_redirects=True)
+                assert_safe_response(r)
             if r.status_code >= 400:
                 broken += 1
-        except httpx.HTTPError:
+        except (httpx.HTTPError, UnsafeUrlError):
             broken += 1
     return broken
 
@@ -282,25 +287,50 @@ def sitemap_urls(start_url, policy=None, max_urls=200, max_child_sitemaps=3):
             sitemap_url, depth = queue.popleft()
             if sitemap_url in seen_sitemaps or not policy.allowed(sitemap_url):
                 continue
+            if not is_safe_url(sitemap_url):
+                continue
             seen_sitemaps.add(sitemap_url)
             try:
                 response = client.get(sitemap_url)
+                assert_safe_response(response)
                 if response.status_code >= 400:
                     continue
                 kind, entries = _parse_sitemap_xml(response.content)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, UnsafeUrlError):
                 continue
             if kind == "sitemapindex" and depth == 0:
                 for loc, _ in entries[:max_child_sitemaps]:
-                    queue.append((loc, depth + 1))
+                    if is_safe_url(loc):
+                        queue.append((loc, depth + 1))
                 continue
             for loc, lastmod in entries:
-                if same_domain(start_url, loc):
+                if same_domain(start_url, loc) and is_safe_url(loc):
                     results.append({"url": loc, "lastmod": lastmod})
                 if len(results) >= max_urls:
                     break
 
     return results
+
+
+def _sitemap_priority_urls(start_url, policy, limit=10):
+    """Audit correctif §1 — sous-ensemble PERTINENT du sitemap (équipe/
+    about/auteurs/carrières/jobs/blog/actualités/presse/contact), jamais
+    l'intégralité : le budget max_pages du crawl doit rester maîtrisé, pas
+    "crawler 200 pages". `lastmod` n'est utilisé nulle part ici comme date
+    d'évènement — seulement pour découvrir des URLs, jamais pour dater un
+    fait (voir _extract_temporal_events, qui ignore totalement le sitemap)."""
+    try:
+        entries = sitemap_urls(start_url, policy=policy, max_urls=200, max_child_sitemaps=3)
+    except Exception:
+        return []
+    seen = set()
+    ordered = []
+    for entry in entries:
+        url = entry["url"]
+        if is_important_url(url) and url not in seen:
+            seen.add(url)
+            ordered.append(url)
+    return ordered[:limit]
 
 
 def crawl_site(start_url, max_pages=None, check_broken_links=True):
@@ -310,6 +340,12 @@ def crawl_site(start_url, max_pages=None, check_broken_links=True):
     delay = policy.crawl_delay() or settings.CRAWL_DELAY_SECONDS
     queue = deque([(start_url,0)])
     for candidate in important_candidate_urls(start_url):
+        queue.append((candidate, 1))
+    # Audit correctif §1 — le sitemap doit être réellement utilisé, mais
+    # seulement pour ses URLs pertinentes (équipe/about/auteurs/carrières/
+    # jobs/blog/actualités/presse/contact) : mêmes priorité et budget que les
+    # URLs devinées ci-dessus, jamais l'intégralité du sitemap.
+    for candidate in _sitemap_priority_urls(start_url, policy):
         queue.append((candidate, 1))
     seen = set()
     pages = []
@@ -324,9 +360,12 @@ def crawl_site(start_url, max_pages=None, check_broken_links=True):
             seen.add(url)
             if not policy.allowed(url):
                 continue
+            if not is_safe_url(url):
+                continue
             started = time.perf_counter()
             try:
                 response = client.get(url)
+                assert_safe_response(response)
                 elapsed = round((time.perf_counter()-started)*1000)
                 if response.status_code >= 400 or "text/html" not in response.headers.get("content-type",""):
                     continue
@@ -347,7 +386,7 @@ def crawl_site(start_url, max_pages=None, check_broken_links=True):
                 data.pop("_internal_urls", None)
                 pages.append(data)
                 time.sleep(delay)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, UnsafeUrlError):
                 continue
 
     return {

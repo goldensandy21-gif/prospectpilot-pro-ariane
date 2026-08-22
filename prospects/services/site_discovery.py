@@ -90,9 +90,14 @@ def evaluate_site_confidence(text: str, title: str, company_name: str, city: str
 
 
 def score_site(url: str, company_name: str, city: str = "", siren: str = "", siret: str = "", timeout: float = 4) -> tuple[int, dict]:
+    from .url_safety import assert_safe_response, is_safe_url
+
+    if not is_safe_url(url):
+        return 0, {}
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True, headers={"User-Agent": settings.USER_AGENT}) as client:
             r = client.get(url)
+            assert_safe_response(r)
         if r.status_code >= 400 or "text/html" not in r.headers.get("content-type", ""):
             return 0, {}
         soup = BeautifulSoup(r.text, "lxml")
