@@ -116,7 +116,12 @@ def filtered_prospects(request):
             qs = qs.filter(intent_score__gte=bounds[0], intent_score__lte=bounds[1])
 
     qs = PROSPECT_LIST_FILTER_FUNCS.get(quick_filter, PROSPECT_LIST_FILTER_FUNCS["all"])(qs)
-    return qs
+    # Correctif d'audit (section 7) : tri explicite sur le score canonique
+    # "Priorité" (qui incorpore désormais Intent/Engagement, voir
+    # predictneed_scoring.py) — sans ce .order_by() explicite, le queryset
+    # retombait sur Prospect.Meta.ordering (l'ancien `priority_score`
+    # historique), qui n'a jamais été mis à jour par PredictNeed IA.
+    return qs.order_by("-predictneed_acquisition_score", "-updated_at")
 
 @login_required
 def dashboard(request):

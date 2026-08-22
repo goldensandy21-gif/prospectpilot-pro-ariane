@@ -32,8 +32,20 @@ liens sociaux, contacts). `timeout_seconds`/`rate_limit_per_minute` restent
 déclarés sur la classe de base pour qu'un futur collecteur qui interrogerait
 une source distante (ex. open_web) s'intègre au même contrat sans revoir
 l'architecture — ils ne sont pas appliqués ici faute d'E/S réelle.
+
+Correctif d'audit (post-Mission 6) — deux collecteurs réellement temporels,
+datés par preuve et jamais par déduction :
+- `SiteChangeSignalCollector` : une technologie apparue depuis un scan
+  antérieur (comparaison réelle, pas une première détection).
+- `RecentActivitySignalCollector` : recrutement Growth/Marketing/CRO ou
+  actualité récente, lus depuis `ProspectEvidence` avec une date d'événement
+  réelle explicite — sans date réelle, aucun signal (prêt pour une future
+  source d'enrichissement, sans scraping LinkedIn).
 """
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
+
+from django.utils import timezone
 
 from .signals import _signal
 
@@ -134,11 +146,102 @@ class DecisionMakerSignalCollector(SignalCollector):
         return signals
 
 
+class SiteChangeSignalCollector(SignalCollector):
+    """Correctif d'audit (section 8, point 3) : premier collecteur
+    RÉELLEMENT temporel — une technologie/capacité apparue depuis un scan
+    antérieur, datée par comparaison, pas par une simple première détection.
+
+    Ne produit un signal QUE si le prospect a un historique de scan avéré
+    (au moins une ProspectTechnology détectée il y a plus de
+    `NEW_TECH_BUFFER_DAYS`) : sans cet historique, on ne peut pas distinguer
+    "changement récent" de "c'est notre toute première visite du site" —
+    dans le doute, aucun signal n'est créé (jamais d'invention). `observed_at`
+    = la date réelle de première détection de la nouvelle technologie."""
+    name = "site_change"
+    source_kind = "website"
+
+    NEW_TECH_BUFFER_DAYS = 7
+
+    def collect(self, prospect):
+        from ..models import ProspectTechnology
+
+        now = timezone.now()
+        cutoff = now - timedelta(days=self.NEW_TECH_BUFFER_DAYS)
+        has_prior_history = ProspectTechnology.objects.filter(
+            prospect=prospect, detected_at__lt=cutoff,
+        ).exists()
+        if not has_prior_history:
+            return []
+
+        signals = []
+        for tech in ProspectTechnology.objects.filter(prospect=prospect, detected_at__gte=cutoff):
+            signals.append(_signal(
+                prospect, f"site_change_{tech.technology}", "timing",
+                f"Nouvelle technologie détectée sur le site : {tech.technology}",
+                value=tech.technology, source_url=tech.source_url,
+                evidence=f"Absente lors d'un scan antérieur à {cutoff:%d/%m/%Y}, détectée le {tech.detected_at:%d/%m/%Y}.",
+                confidence=tech.confidence, score_impact=8, positive=True,
+                source_kind=self.source_kind, signal_group="intent", observed_at=tech.detected_at,
+            ))
+        return signals
+
+
+class RecentActivitySignalCollector(SignalCollector):
+    """Correctif d'audit (section 8, point 3) : recrutement Growth/Marketing/
+    CRO récent ou actualité récente liée acquisition/conversion/analytics.
+
+    Lit des preuves déjà déposées dans `ProspectEvidence` (registre générique
+    d'enrichissement déjà existant — aucune nouvelle table) dont
+    `raw_payload["event_date"]` porte une date d'événement RÉELLE explicite
+    — jamais `collected_at` (date à laquelle ProspectPilot a collecté le
+    fait, pas date à laquelle le fait s'est produit). Sans date réelle
+    explicite, aucun signal n'est créé : silence plutôt qu'invention.
+
+    Aucune connexion réseau ici — ce collecteur normalise une preuve déjà
+    présente. Une future source d'enrichissement (offres d'emploi, actualité
+    entreprise, sur une API publique/autorisée) alimenterait
+    `ProspectEvidence` avec ces `field_name` et une date réelle ; ce
+    collecteur la transformerait alors en signal INTENT correctement daté,
+    sans qu'aucun code ici ne change. Jamais de scraping LinkedIn."""
+    name = "recent_activity"
+    source_kind = "open_web"
+
+    FIELD_LABELS = {
+        "job_posting_growth": "Recrutement Growth/Marketing/CRO récent",
+        "news_acquisition": "Actualité récente liée acquisition/conversion/analytics",
+    }
+
+    def collect(self, prospect):
+        signals = []
+        for evidence in prospect.evidence_items.filter(field_name__in=self.FIELD_LABELS, is_current=True):
+            event_date_raw = (evidence.raw_payload or {}).get("event_date")
+            if not event_date_raw:
+                continue
+            try:
+                observed_at = datetime.fromisoformat(str(event_date_raw))
+            except (ValueError, TypeError):
+                continue
+            if timezone.is_naive(observed_at):
+                observed_at = timezone.make_aware(observed_at)
+
+            signals.append(_signal(
+                prospect, f"activity_{evidence.field_name}", "timing",
+                self.FIELD_LABELS[evidence.field_name],
+                value=evidence.value, source_url=evidence.source_url,
+                evidence=evidence.notes or evidence.value,
+                confidence=evidence.confidence_score, score_impact=10, positive=True,
+                source_kind=self.source_kind, signal_group="intent", observed_at=observed_at,
+            ))
+        return signals
+
+
 DEFAULT_COLLECTORS = [
     TechnologySignalCollector(),
     QuickScanSignalCollector(),
     SocialPresenceSignalCollector(),
     DecisionMakerSignalCollector(),
+    SiteChangeSignalCollector(),
+    RecentActivitySignalCollector(),
 ]
 
 

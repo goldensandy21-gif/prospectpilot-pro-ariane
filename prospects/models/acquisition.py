@@ -71,12 +71,26 @@ class ProductProfile(models.Model):
 # ETAPE 3 — ICP commercial
 # ---------------------------------------------------------------------------
 
+# Correctif d'audit (post-Mission 6, section 7) : "Priorité"
+# (predictneed_acquisition_score) ignorait INTENT/ENGAGEMENT — un score qui
+# n'incorpore pas ce qui vient d'être construit ne mérite plus ce nom. Ajout
+# de "intent"/"engagement" comme composantes pondérées, PAS un cinquième
+# score concurrent : rebalancé à partir des poids historiques (icp_fit
+# 30->25, need 25->15, acquisition_maturity 20->15, contactability 15->15
+# inchangé — reste un verrou dur via outbound_eligible, timing 10->5 car
+# largement remplacé par le nouveau intent_score, pondéré par fraîcheur,
+# que timing_score n'était pas). effective_weights() ci-dessous fusionne ce
+# dict avec ICPProfile.weights puis renormalise à 100% — un ICPProfile
+# existant sans clés "intent"/"engagement" en hérite automatiquement de ces
+# valeurs par défaut, sans migration nécessaire.
 DEFAULT_ICP_WEIGHTS = {
-    "icp_fit": 30,
-    "need": 25,
-    "acquisition_maturity": 20,
+    "icp_fit": 25,
+    "need": 15,
+    "acquisition_maturity": 15,
     "contactability": 15,
-    "timing": 10,
+    "timing": 5,
+    "intent": 15,
+    "engagement": 10,
 }
 
 

@@ -25,6 +25,7 @@ from prospects.models import (
     EmailSequence,
     EmailStep,
     EmailVariant,
+    ProspectEvidence,
     RevenueAttribution,
     SearchCandidate,
 )
@@ -35,7 +36,12 @@ from prospects.services.linkedin_orchestration import record_invitation_accepted
 from prospects.services.linkedin_provider import MockLinkedInProvider
 from prospects.services.next_best_action import compute_next_best_action
 from prospects.services.predictneed_webhook import process_predictneed_event
-from prospects.services.signal_collectors import QuickScanSignalCollector, SocialPresenceSignalCollector, run_signal_collectors
+from prospects.services.signal_collectors import (
+    QuickScanSignalCollector,
+    RecentActivitySignalCollector,
+    SocialPresenceSignalCollector,
+    run_signal_collectors,
+)
 from prospects.tests.factories import make_campaign, make_compliance_profile, make_icp, make_prospect, make_product, make_public_email
 
 
@@ -71,11 +77,23 @@ class FullBusinessJourneyEndToEndTests(TestCase):
         self.assertEqual(errors, [])
         self.assertGreater(len(saved), 0)
 
+        # Un véritable événement récent et daté (recrutement Growth) — sans
+        # lui, les caractéristiques statiques du site (FIT) ne suffisent
+        # jamais à produire de l'INTENT (correctif d'audit).
+        ProspectEvidence.objects.create(
+            prospect=prospect, field_name="job_posting_growth", value="Offre Responsable Growth publiée",
+            normalized_value="offre growth e2e", source_url="https://agence-complete.example/carrieres",
+            confidence_score=75, is_current=True, raw_payload={"event_date": self.now.isoformat()},
+        )
+        saved, errors = run_signal_collectors(prospect, collectors=[RecentActivitySignalCollector()])
+        self.assertEqual(errors, [])
+        self.assertEqual(len(saved), 1)
+
         # --- Fit/Intent : scores recalculés à partir des signaux réellement détectés. ---
         result = recompute_acquisition_scores(prospect, now=self.now)
         self.assertGreater(result["intent_score"], 0)
         status = in_market_status(prospect)
-        self.assertIn(status["code"], {"emerging", "probable", "strong"})
+        self.assertNotEqual(status["code"], "no_signal")
 
         # --- Sélection : le prospect entre dans le pipeline commercial. ---
         prospect.selected_for_prospecting = True
@@ -97,7 +115,8 @@ class FullBusinessJourneyEndToEndTests(TestCase):
 
         campaign = make_campaign(product, icp=icp, status="active")
         campaign.sequence = sequence
-        campaign.save(update_fields=["sequence"])
+        campaign.validated_at = self.now  # garde-fou is_sendable (correctif d'audit, bloc 5)
+        campaign.save(update_fields=["sequence", "validated_at"])
         campaign_prospect = CampaignProspect.objects.create(
             campaign=campaign, prospect=prospect, status="selected",
             acquisition_score_snapshot=result["intent_score"],

@@ -69,10 +69,56 @@ class Migration0007BackfillDataProtectionTests(TestCase):
         migration_0007.backfill_signal_fields(django_apps, _FakeSchemaEditor())
         signal.refresh_from_db()
         self.assertEqual(signal.evidence, "preuve détaillée")
-        self.assertEqual(signal.signal_group, "intent")
+        # Correctif d'audit : "growth" est une caractéristique statique du
+        # site (FIT/maturité), jamais une intention d'achat actuelle.
+        self.assertEqual(signal.signal_group, "fit")
         self.assertEqual(signal.source_kind, "website")
         self.assertIsNotNone(signal.observed_at)
         self.assertEqual(signal.fingerprint, signal_fingerprint("legacy", "valeur", "preuve détaillée"))
+
+    def test_backfill_never_classifies_a_historical_signal_as_intent(self):
+        """Correctif d'audit : quelle que soit sa catégorie historique, aucun
+        signal ancien ne doit se retrouver classé comme une intention d'achat
+        récente — seule "timing" (jamais utilisée en production avant
+        Mission 6) est associée à intent."""
+        prospect = make_prospect()
+        categories = ["icp", "contactability", "analytics", "advertising", "crm", "acquisition", "competitor", "growth", "conversion"]
+        for i, category in enumerate(categories):
+            ProspectSignal.objects.create(
+                prospect=prospect, signal_type=f"legacy_{i}", category=category,
+                label=f"Signal {category}", evidence="preuve", confidence=70,
+                score_impact=5, positive=True,
+            )
+        migration_0007.backfill_signal_fields(django_apps, _FakeSchemaEditor())
+        for signal in ProspectSignal.objects.filter(prospect=prospect):
+            self.assertNotEqual(signal.signal_group, "intent", f"category={signal.category} ne doit pas devenir intent")
+
+    def test_backfill_sets_source_kind_technology_for_technology_origin_categories(self):
+        """Correctif d'audit : technologie != website. Les catégories
+        exclusivement produites par build_signals_from_technologies doivent
+        être backfillées "technology", pas "website"."""
+        prospect = make_prospect()
+        for category in ["analytics", "advertising", "crm", "competitor", "acquisition"]:
+            ProspectSignal.objects.create(
+                prospect=prospect, signal_type=f"tech_{category}", category=category,
+                label=f"Signal {category}", evidence="preuve", confidence=70,
+                score_impact=5, positive=True,
+            )
+        migration_0007.backfill_signal_fields(django_apps, _FakeSchemaEditor())
+        for signal in ProspectSignal.objects.filter(prospect=prospect):
+            self.assertEqual(signal.source_kind, "technology", f"category={signal.category}")
+
+    def test_backfill_sets_source_kind_website_for_quick_scan_origin_categories(self):
+        prospect = make_prospect()
+        for category in ["icp", "contactability", "growth", "conversion", "risk"]:
+            ProspectSignal.objects.create(
+                prospect=prospect, signal_type=f"qs_{category}", category=category,
+                label=f"Signal {category}", evidence="preuve", confidence=70,
+                score_impact=5, positive=True,
+            )
+        migration_0007.backfill_signal_fields(django_apps, _FakeSchemaEditor())
+        for signal in ProspectSignal.objects.filter(prospect=prospect):
+            self.assertEqual(signal.source_kind, "website", f"category={signal.category}")
 
 
 class ExistingDataUntouchedByMission6ServicesTests(TestCase):

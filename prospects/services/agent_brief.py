@@ -5,7 +5,6 @@ ProspectTechnology, CompetitorDetection, ContactPerson, PublicEmail) : aucune ph
 n'invente une observation qui ne serait pas rattachée à une preuve en base.
 """
 from ..models import AgentBrief
-from .acquisition_scores import recompute_acquisition_scores
 from .next_best_action import compute_next_best_action
 from .predictneed_scoring import score_prospect
 
@@ -25,6 +24,26 @@ def _contact_recommendation(prospect):
     return email.email, reason
 
 
+def _detected_need(prospect, product):
+    """Correctif d'audit (section 16) : `product.target_problem` est un
+    énoncé GÉNÉRIQUE au niveau du produit — il ne doit jamais être présenté
+    tel quel comme un besoin DÉTECTÉ chez CE prospect sans preuve
+    correspondante. On sépare toujours : signaux INTENT réellement observés
+    chez ce prospect (préférés, cités nommément) vs. problème générique du
+    produit (explicitement étiqueté comme tel, jamais présenté comme
+    "détecté")."""
+    intent_signals = list(prospect.signals.filter(signal_group="intent", positive=True)[:3])
+    if intent_signals:
+        labels = ", ".join(s.label for s in intent_signals)
+        return f"Signaux observés chez ce prospect pouvant indiquer un besoin : {labels}."
+    if product and product.target_problem:
+        return (
+            f"Aucun signal spécifique confirmé chez ce prospect. Problème générique "
+            f"adressé par {product.name} : {product.target_problem}"
+        )
+    return "Signaux insuffisants pour formuler un besoin détecté précis."
+
+
 def _recommended_angle(prospect, competitor_detections):
     for detection in competitor_detections:
         if detection.competitor.suggested_angle:
@@ -38,11 +57,10 @@ def _recommended_angle(prospect, competitor_detections):
 
 def generate_agent_brief(prospect, icp=None, product=None, campaign=None, persist=True):
     icp = icp or prospect.predictneed_icp
+    # score_prospect() rafraîchit intent_score/engagement_score en interne
+    # avant de calculer "Priorité" (correctif d'audit) — donc déjà à jour
+    # ici pour le calcul de la NBA juste après.
     score_result = score_prospect(prospect, icp=icp, product=product, persist=persist)
-    # Rafraîchit intent_score/engagement_score avant de calculer la NBA :
-    # sans ça, un brief généré juste après une nouvelle détection de signal
-    # utiliserait un intent_score obsolète.
-    recompute_acquisition_scores(prospect, persist=persist)
 
     positive_signals = list(prospect.signals.filter(positive=True).order_by("-score_impact")[:8])
     risk_signals = list(prospect.signals.filter(category="risk")[:5])
@@ -57,10 +75,7 @@ def generate_agent_brief(prospect, icp=None, product=None, campaign=None, persis
 
     why_this_company = "; ".join(f"{s.label}" for s in positive_signals) or "Correspond aux critères de l'ICP sélectionné."
 
-    detected_need = (
-        (product.target_problem if product else "")
-        or "Signaux insuffisants pour formuler un besoin détecté précis."
-    )
+    detected_need = _detected_need(prospect, product)
 
     tech_names = ", ".join(sorted({t.technology for t in technologies})) or "aucune technologie détectée"
     acquisition_maturity = f"Score de maturité acquisition : {score_result['acquisition_maturity_score']}/100. Technologies détectées : {tech_names}."

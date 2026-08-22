@@ -21,11 +21,18 @@ CRM_TECHS = {"HubSpot", "Salesforce", "Pipedrive", "Brevo", "Mailchimp", "Active
 BEHAVIOUR_ANALYTICS_TECHS = {"Hotjar", "Microsoft Clarity", "Contentsquare"}
 VISITOR_INTELLIGENCE_TECHS = {"Dealfront / Leadfeeder", "Leadinfo"}
 
-# Catégorie technique (nature du signal) -> rôle dans le scoring. Un outil
-# détecté (analytics/advertising/crm/acquisition/competitor) est un indice de
-# maturité structurelle (FIT), jamais d'intention d'achat à lui seul.
-# "growth"/"conversion"/"timing" sont les catégories réellement temporelles
-# retenues pour INTENT (mission 6, section 5).
+# Catégorie technique (nature du signal) -> rôle par défaut dans le scoring.
+# Correctif d'audit (post-Mission 6) : "growth"/"conversion" décrivent des
+# CARACTÉRISTIQUES STATIQUES du site (formulaire de contact, page tarifs,
+# lead magnet...) — de la maturité/capacité de conversion (FIT), jamais une
+# intention d'achat ACTUELLE. Elles ne doivent donc PAS être mappées sur
+# "intent" par défaut. Seule "timing" reste réservée à l'intent — et
+# uniquement pour des signaux réellement temporels, sourcés et datés
+# explicitement par leur collecteur (jamais déduits automatiquement d'une
+# simple catégorie). Un signal véritablement "intent" doit TOUJOURS être créé
+# avec `signal_group="intent"` explicite (voir signal_collectors.py) — ce
+# mapping générique n'est qu'un filet de sécurité pour les catégories qui
+# n'ont pas d'ambiguïté (fit/risk).
 CATEGORY_TO_GROUP = {
     "icp": "fit",
     "contactability": "fit",
@@ -34,8 +41,8 @@ CATEGORY_TO_GROUP = {
     "crm": "fit",
     "acquisition": "fit",
     "competitor": "fit",
-    "growth": "intent",
-    "conversion": "intent",
+    "growth": "fit",
+    "conversion": "fit",
     "timing": "intent",
     "risk": "risk",
 }
@@ -56,12 +63,25 @@ def _signal(
     confidence=70, score_impact=0, positive=True, source_kind="website", signal_group=None,
     observed_at=None,
 ):
+    """Correctif d'audit — fraîcheur : `observed_at` n'est JAMAIS déduit
+    automatiquement à "maintenant" pour un signal `intent`. Un fait FIT
+    observé aujourd'hui a réellement pour date d'observation "maintenant"
+    (on constate un état présent, la fraîcheur n'a pas d'impact sur son
+    score puisque FIT n'est jamais pondéré par fraîcheur). Un signal INTENT
+    en revanche N'A DE SENS QUE daté : si son appelant ne fournit pas de
+    date réelle, `observed_at` reste None — `signal_freshness()` le traite
+    alors comme "date inconnue" (poids nul), au lieu de bénéficier à tort du
+    multiplicateur "très frais" simplement parce que ProspectPilot vient de
+    le découvrir."""
+    resolved_group = signal_group or CATEGORY_TO_GROUP.get(category, "fit")
+    if observed_at is None and resolved_group != "intent":
+        observed_at = timezone.now()
     return ProspectSignal(
         prospect=prospect, signal_type=signal_type, category=category, label=label,
         value=value, source_url=source_url, evidence=evidence, confidence=confidence,
         score_impact=score_impact, positive=positive, source_kind=source_kind,
-        signal_group=signal_group or CATEGORY_TO_GROUP.get(category, "fit"),
-        observed_at=observed_at or timezone.now(),
+        signal_group=resolved_group,
+        observed_at=observed_at,
         fingerprint=signal_fingerprint(signal_type, value, evidence),
     )
 
@@ -214,7 +234,11 @@ def persist_signals(prospect, signal_objects):
                 "source_url": signal.source_url, "evidence": signal.evidence,
                 "confidence": signal.confidence, "score_impact": signal.score_impact,
                 "positive": signal.positive, "last_checked_at": now,
-                "observed_at": signal.observed_at or now,
+                # Correctif d'audit : ne JAMAIS remplacer un observed_at
+                # manquant par `now` ici — sinon un signal intent sans date
+                # réelle connue redeviendrait artificiellement "très frais"
+                # (voir _signal() ci-dessus, même principe).
+                "observed_at": signal.observed_at,
             },
         )
         # Attribut transitoire (jamais persisté) : distingue un signal

@@ -17,17 +17,54 @@ satisfait ne fait jamais rien de plus qu'un `waiting`.
 Arrêt immédiat (avant toute exécution d'étape) si : réponse déjà obtenue,
 conversion déjà enregistrée, désinscription/opposition, DNC, client déjà
 payant — jamais une action de séquence après l'un de ces états.
+
+Correctif d'audit (post-Mission 6) — garde-fous d'avant Mission 6 restaurés,
+qui n'avaient pas été repris par ce module au premier passage :
+- `campaign.is_sendable` (validation explicite obligatoire) vérifié EN
+  PREMIER, avant toute autre logique : une campagne brouillon/non validée
+  ne produit aucune action, sur aucun canal.
+- `daily_send_limit`/`total_limit` : comptés tous canaux confondus (e-mail +
+  LinkedIn), jamais dépassés.
+- Politique domaine/jour existante (`services/campaign_sending.py::_domain`)
+  réappliquée à l'étape e-mail : jamais deux e-mails au même domaine le
+  même jour pour une campagne.
 """
 from django.db import transaction
 from django.utils import timezone
 
-from ..models import CampaignProspect, ConversionEvent, Suppression
+from ..models import CampaignProspect, ContactLog, ConversionEvent, EmailSend, Suppression
+from .campaign_sending import _domain
 from .linkedin_orchestration import linkedin_profile_url, send_invitation, send_message
 from .message_guardrails import build_personalization_snippet
 from .predictneed_email import send_predictneed_campaign_email
 from .signal_freshness import signal_freshness
 
 STOP_CONTACT_LOG_OUTCOMES = {"replied", "meeting", "proposal", "optout"}
+
+
+def _campaign_action_counts(campaign, today):
+    """Nombre d'actions sortantes (e-mail + LinkedIn confondus) déjà
+    exécutées pour cette campagne aujourd'hui et au total — sert à faire
+    respecter daily_send_limit/total_limit quel que soit le canal."""
+    email_today = EmailSend.objects.filter(
+        campaign_prospect__campaign=campaign, created_at__date=today,
+    ).exclude(status="draft").count()
+    linkedin_today = ContactLog.objects.filter(
+        campaign_prospect__campaign=campaign, channel="linkedin", contacted_at__date=today,
+    ).count()
+    email_total = EmailSend.objects.filter(campaign_prospect__campaign=campaign).exclude(status="draft").count()
+    linkedin_total = ContactLog.objects.filter(campaign_prospect__campaign=campaign, channel="linkedin").count()
+    return email_today + linkedin_today, email_total + linkedin_total
+
+
+def _domain_already_contacted_today(campaign, domain, today):
+    """Même règle que send_campaign_batch (ETAPE 17) : jamais deux e-mails
+    au même domaine le même jour pour une campagne."""
+    contacted_domains = {
+        _domain(cp.prospect.public_email)
+        for cp in campaign.campaign_prospects.filter(contacted_at__date=today)
+    }
+    return domain in contacted_domains
 
 
 def _stop_reason(campaign_prospect):
@@ -115,6 +152,13 @@ def advance_campaign_prospect(campaign_prospect_id, now=None, linkedin_provider=
         campaign_prospect = CampaignProspect.objects.select_for_update().select_related(
             "campaign__sequence", "prospect",
         ).get(pk=campaign_prospect_id)
+        campaign = campaign_prospect.campaign
+
+        # Garde-fou restauré (audit) : une campagne brouillon/non validée ne
+        # doit produire AUCUN envoi réel, sur aucun canal — vérifié en tout
+        # premier, avant même les conditions d'arrêt par prospect.
+        if not campaign.is_sendable:
+            return {"action": "not_sendable", "reason": "Campagne non validée ou non active (draft)."}
 
         reason = _stop_reason(campaign_prospect)
         if reason:
@@ -124,7 +168,7 @@ def advance_campaign_prospect(campaign_prospect_id, now=None, linkedin_provider=
                 campaign_prospect.save(update_fields=["status", "excluded_reason", "updated_at"])
             return {"action": "stopped", "reason": reason}
 
-        sequence = campaign_prospect.campaign.sequence
+        sequence = campaign.sequence
         if not sequence or not sequence.steps.filter(active=True).exists():
             return {"action": "no_sequence"}
 
@@ -145,6 +189,20 @@ def advance_campaign_prospect(campaign_prospect_id, now=None, linkedin_provider=
 
         if not _delay_elapsed(campaign_prospect, step, now):
             return {"action": "waiting", "step": step.name}
+
+        # Garde-fous restaurés (audit) : limites d'envoi quotidien/total,
+        # tous canaux confondus.
+        today_count, total_count = _campaign_action_counts(campaign, now.date())
+        if total_count >= campaign.total_limit:
+            return {"action": "blocked_total_limit", "step": step.name}
+        if today_count >= campaign.daily_send_limit:
+            return {"action": "blocked_daily_limit", "step": step.name}
+
+        # Politique domaine/jour existante (ETAPE 17), réappliquée à l'étape e-mail.
+        if step.channel == "email":
+            domain = _domain(campaign_prospect.prospect.public_email)
+            if domain and _domain_already_contacted_today(campaign, domain, now.date()):
+                return {"action": "skipped_domain_already_contacted_today", "step": step.name}
 
         return _execute_step(campaign_prospect, step, now, linkedin_provider)
 

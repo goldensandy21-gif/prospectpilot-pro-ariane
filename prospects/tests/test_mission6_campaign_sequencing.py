@@ -9,6 +9,7 @@ from prospects.models import (
     ContactLog,
     ContactPerson,
     ConversionEvent,
+    EmailSend,
     EmailSequence,
     EmailStep,
     EmailVariant,
@@ -17,7 +18,7 @@ from prospects.models import (
 from prospects.services.campaign_sequencing import advance_campaign_prospect, run_campaign_sequences
 from prospects.services.linkedin_orchestration import record_invitation_accepted, record_invitation_declined
 from prospects.services.linkedin_provider import MockLinkedInProvider
-from prospects.tests.factories import make_campaign, make_campaign_prospect, make_icp, make_prospect, make_product
+from prospects.tests.factories import make_campaign, make_campaign_prospect, make_icp, make_prospect, make_product, make_public_email
 
 
 def _multichannel_sequence(product):
@@ -32,6 +33,17 @@ def _multichannel_sequence(product):
     return sequence, connect, message, email_step
 
 
+def _validated_campaign(product, icp, **overrides):
+    """Campagne active + validée explicitement (is_sendable) — l'état requis
+    en production pour qu'une séquence puisse produire une action réelle."""
+    defaults = {"status": "active"}
+    defaults.update(overrides)
+    campaign = make_campaign(product, icp=icp, **defaults)
+    campaign.validated_at = timezone.now()
+    campaign.save(update_fields=["validated_at"])
+    return campaign
+
+
 def _with_linkedin_contact(prospect):
     ContactPerson.objects.create(
         prospect=prospect, full_name="Alex Dupont", profile_url="https://linkedin.com/in/alex-dupont", is_active=True,
@@ -42,7 +54,7 @@ class StopConditionsTests(TestCase):
     def setUp(self):
         self.product = make_product()
         self.icp = make_icp(self.product)
-        self.campaign = make_campaign(self.product, icp=self.icp)
+        self.campaign = _validated_campaign(self.product, self.icp)
         self.sequence, self.connect, self.message, self.email_step = _multichannel_sequence(self.product)
         self.campaign.sequence = self.sequence
         self.campaign.save(update_fields=["sequence"])
@@ -90,6 +102,175 @@ class StopConditionsTests(TestCase):
         self.assertEqual(result["action"], "stopped")
         self.assertIn("payant", result["reason"])
 
+    def test_a_reply_recorded_mid_sequence_stops_the_next_action(self):
+        """Tentative de contournement : le prospect est déjà en cours de
+        séquence (invitation envoyée) puis répond — l'étape suivante ne doit
+        jamais s'exécuter."""
+        prospect = make_prospect()
+        _with_linkedin_contact(prospect)
+        cp = make_campaign_prospect(self.campaign, prospect)
+        provider = MockLinkedInProvider()
+        now = timezone.now()
+        advance_campaign_prospect(cp.pk, now=now, linkedin_provider=provider)
+
+        ContactLog.objects.create(prospect=prospect, channel="email", outcome="replied")
+        result = advance_campaign_prospect(cp.pk, now=now + timedelta(days=10), linkedin_provider=provider)
+        self.assertEqual(result["action"], "stopped")
+
+
+class CampaignValidationGuardrailTests(TestCase):
+    """Correctif d'audit — garde-fous restaurés : une campagne non validée
+    ne doit produire AUCUNE action, sur aucun canal, même en tentant de
+    contourner via des appels répétés ou un délai avancé."""
+
+    def setUp(self):
+        self.product = make_product()
+        self.icp = make_icp(self.product)
+        self.sequence, self.connect, self.message, self.email_step = _multichannel_sequence(self.product)
+        self.prospect = make_prospect()
+        _with_linkedin_contact(self.prospect)
+        self.provider = MockLinkedInProvider()
+
+    def test_draft_campaign_produces_no_action(self):
+        campaign = make_campaign(self.product, icp=self.icp, status="draft")
+        campaign.sequence = self.sequence
+        campaign.save(update_fields=["sequence"])
+        cp = make_campaign_prospect(campaign, self.prospect)
+
+        result = advance_campaign_prospect(cp.pk, linkedin_provider=self.provider)
+        self.assertEqual(result["action"], "not_sendable")
+        self.assertEqual(ContactLog.objects.filter(campaign_prospect=cp).count(), 0)
+
+    def test_active_but_unvalidated_campaign_produces_no_action(self):
+        """Tentative de contournement : status="active" mais validated_at
+        jamais renseigné — is_sendable doit rester False."""
+        campaign = make_campaign(self.product, icp=self.icp, status="active")
+        campaign.sequence = self.sequence
+        campaign.save(update_fields=["sequence"])
+        self.assertIsNone(campaign.validated_at)
+        cp = make_campaign_prospect(campaign, self.prospect)
+
+        result = advance_campaign_prospect(cp.pk, linkedin_provider=self.provider)
+        self.assertEqual(result["action"], "not_sendable")
+
+    def test_repeated_calls_on_unvalidated_campaign_never_produce_an_action(self):
+        campaign = make_campaign(self.product, icp=self.icp, status="draft")
+        campaign.sequence = self.sequence
+        campaign.save(update_fields=["sequence"])
+        cp = make_campaign_prospect(campaign, self.prospect)
+        now = timezone.now()
+
+        for offset in range(5):
+            result = advance_campaign_prospect(cp.pk, now=now + timedelta(days=offset * 10), linkedin_provider=self.provider)
+            self.assertEqual(result["action"], "not_sendable")
+        self.assertEqual(ContactLog.objects.filter(campaign_prospect=cp).count(), 0)
+
+    def test_validated_active_campaign_does_produce_an_action(self):
+        """Contre-épreuve : une fois correctement validée, l'action s'exécute."""
+        campaign = _validated_campaign(self.product, self.icp)
+        campaign.sequence = self.sequence
+        campaign.save(update_fields=["sequence"])
+        cp = make_campaign_prospect(campaign, self.prospect)
+
+        result = advance_campaign_prospect(cp.pk, linkedin_provider=self.provider)
+        self.assertEqual(result["action"], "linkedin_invitation")
+
+
+class CampaignLimitGuardrailTests(TestCase):
+    """Correctif d'audit — daily_send_limit/total_limit restaurés, tous
+    canaux confondus."""
+
+    def setUp(self):
+        self.product = make_product()
+        self.icp = make_icp(self.product)
+        self.sequence, self.connect, self.message, self.email_step = _multichannel_sequence(self.product)
+        self.provider = MockLinkedInProvider()
+
+    def _prospect_with_linkedin(self, i):
+        prospect = make_prospect(name=f"Prospect Limite {i}", siret=f"6000000000000{i}")
+        _with_linkedin_contact(prospect)
+        return prospect
+
+    def test_daily_send_limit_blocks_further_actions_same_day(self):
+        campaign = _validated_campaign(self.product, self.icp, daily_send_limit=1, total_limit=200)
+        campaign.sequence = self.sequence
+        campaign.save(update_fields=["sequence"])
+
+        prospect_a = self._prospect_with_linkedin(1)
+        prospect_b = self._prospect_with_linkedin(2)
+        cp_a = make_campaign_prospect(campaign, prospect_a)
+        cp_b = make_campaign_prospect(campaign, prospect_b)
+        now = timezone.now()
+
+        result_a = advance_campaign_prospect(cp_a.pk, now=now, linkedin_provider=self.provider)
+        self.assertEqual(result_a["action"], "linkedin_invitation")
+
+        result_b = advance_campaign_prospect(cp_b.pk, now=now, linkedin_provider=self.provider)
+        self.assertEqual(result_b["action"], "blocked_daily_limit")
+        self.assertEqual(ContactLog.objects.filter(prospect=prospect_b).count(), 0)
+
+    def test_daily_limit_resets_the_next_day(self):
+        campaign = _validated_campaign(self.product, self.icp, daily_send_limit=1, total_limit=200)
+        campaign.sequence = self.sequence
+        campaign.save(update_fields=["sequence"])
+
+        prospect_a = self._prospect_with_linkedin(3)
+        prospect_b = self._prospect_with_linkedin(4)
+        cp_a = make_campaign_prospect(campaign, prospect_a)
+        cp_b = make_campaign_prospect(campaign, prospect_b)
+        now = timezone.now()
+
+        advance_campaign_prospect(cp_a.pk, now=now, linkedin_provider=self.provider)
+        result_next_day = advance_campaign_prospect(cp_b.pk, now=now + timedelta(days=1), linkedin_provider=self.provider)
+        self.assertEqual(result_next_day["action"], "linkedin_invitation")
+
+    def test_total_limit_blocks_regardless_of_day(self):
+        campaign = _validated_campaign(self.product, self.icp, daily_send_limit=200, total_limit=1)
+        campaign.sequence = self.sequence
+        campaign.save(update_fields=["sequence"])
+
+        prospect_a = self._prospect_with_linkedin(5)
+        prospect_b = self._prospect_with_linkedin(6)
+        cp_a = make_campaign_prospect(campaign, prospect_a)
+        cp_b = make_campaign_prospect(campaign, prospect_b)
+        now = timezone.now()
+
+        advance_campaign_prospect(cp_a.pk, now=now, linkedin_provider=self.provider)
+        result_b = advance_campaign_prospect(cp_b.pk, now=now + timedelta(days=30), linkedin_provider=self.provider)
+        self.assertEqual(result_b["action"], "blocked_total_limit")
+
+
+class EmailDomainPolicyGuardrailTests(TestCase):
+    """Correctif d'audit — politique domaine/jour (ETAPE 17) réappliquée à
+    la séquence multicanal."""
+
+    def test_same_domain_same_day_email_is_skipped(self):
+        product = make_product()
+        icp = make_icp(product)
+        sequence = EmailSequence.objects.create(product=product, name="Email seul")
+        email_step = EmailStep.objects.create(sequence=sequence, order=1, delay_days=0, channel="email", name="Premier contact")
+        EmailVariant.objects.create(step=email_step, name="V1", subject_template="{{ company_name }}")
+
+        campaign = _validated_campaign(product, icp)
+        campaign.sequence = sequence
+        campaign.save(update_fields=["sequence"])
+
+        prospect_a = make_prospect(name="Domaine A", siret="70000000000001")
+        make_public_email(prospect_a, email="contact@meme-domaine.example")
+        prospect_b = make_prospect(name="Domaine B", siret="70000000000002")
+        make_public_email(prospect_b, email="autre@meme-domaine.example")
+
+        cp_a = make_campaign_prospect(campaign, prospect_a)
+        cp_b = make_campaign_prospect(campaign, prospect_b)
+        now = timezone.now()
+
+        result_a = advance_campaign_prospect(cp_a.pk, now=now)
+        self.assertEqual(result_a["action"], "email")
+
+        result_b = advance_campaign_prospect(cp_b.pk, now=now)
+        self.assertEqual(result_b["action"], "skipped_domain_already_contacted_today")
+        self.assertEqual(EmailSend.objects.filter(prospect=prospect_b).count(), 0)
+
 
 class MultichannelSequenceWalkTests(TestCase):
     """LINKEDIN_CONNECT -> WAIT -> LINKEDIN_MESSAGE -> WAIT -> EMAIL avec
@@ -98,7 +279,7 @@ class MultichannelSequenceWalkTests(TestCase):
     def setUp(self):
         self.product = make_product()
         self.icp = make_icp(self.product)
-        self.campaign = make_campaign(self.product, icp=self.icp)
+        self.campaign = _validated_campaign(self.product, self.icp)
         self.sequence, self.connect, self.message, self.email_step = _multichannel_sequence(self.product)
         self.campaign.sequence = self.sequence
         self.campaign.save(update_fields=["sequence"])
@@ -144,7 +325,6 @@ class MultichannelSequenceWalkTests(TestCase):
         record_invitation_accepted(invitation_log)
         advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(days=3), linkedin_provider=self.provider)
 
-        from prospects.tests.factories import make_public_email
         make_public_email(self.prospect)
 
         result = advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(days=8), linkedin_provider=self.provider)
@@ -157,7 +337,6 @@ class MultichannelSequenceWalkTests(TestCase):
         invitation_log = ContactLog.objects.get(campaign_prospect=self.cp, email_step=self.connect)
         record_invitation_declined(invitation_log)
 
-        from prospects.tests.factories import make_public_email
         make_public_email(self.prospect)
 
         # L'étape "message" est sautée (refusée), mais l'étape "email" qui suit
@@ -178,7 +357,6 @@ class MultichannelSequenceWalkTests(TestCase):
         record_invitation_accepted(invitation_log)
         advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(days=3), linkedin_provider=self.provider)
 
-        from prospects.tests.factories import make_public_email
         make_public_email(self.prospect)
         advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(days=8), linkedin_provider=self.provider)
 
@@ -193,7 +371,7 @@ class NoDuplicateActionTests(TestCase):
     def setUp(self):
         self.product = make_product()
         self.icp = make_icp(self.product)
-        self.campaign = make_campaign(self.product, icp=self.icp)
+        self.campaign = _validated_campaign(self.product, self.icp)
         self.sequence, self.connect, self.message, self.email_step = _multichannel_sequence(self.product)
         self.campaign.sequence = self.sequence
         self.campaign.save(update_fields=["sequence"])
@@ -226,7 +404,7 @@ class RunCampaignSequencesTests(TestCase):
     def test_processes_multiple_campaign_prospects_and_respects_limit(self):
         product = make_product()
         icp = make_icp(product)
-        campaign = make_campaign(product, icp=icp)
+        campaign = _validated_campaign(product, icp)
         sequence, connect, message, email_step = _multichannel_sequence(product)
         campaign.sequence = sequence
         campaign.save(update_fields=["sequence"])
@@ -243,7 +421,7 @@ class RunCampaignSequencesTests(TestCase):
     def test_excludes_stopped_statuses_from_batch(self):
         product = make_product()
         icp = make_icp(product)
-        campaign = make_campaign(product, icp=icp)
+        campaign = _validated_campaign(product, icp)
         sequence, connect, message, email_step = _multichannel_sequence(product)
         campaign.sequence = sequence
         campaign.save(update_fields=["sequence"])

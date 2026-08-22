@@ -382,3 +382,68 @@ autorisée (le provider `manual`/`mock` reste la seule implémentation, par
 design — aucune automatisation réelle n'a jamais été demandée), et
 l'optimisation automatique des pondérations à partir de l'historique réel
 (explicitement reportée par la mission elle-même, section 17).
+
+## Correctifs suite à audit indépendant
+
+Un audit indépendant a identifié 8 défauts fonctionnels non couverts par
+les 289 tests initiaux. Tous corrigés, avec 32 nouveaux tests (321 au
+total) :
+
+1. **Sémantique INTENT** — `CATEGORY_TO_GROUP` classait "growth"/"conversion"
+   (formulaire de contact, booking, lead magnet — des caractéristiques
+   STATIQUES du site) comme intent. Corrigé : ces catégories sont
+   maintenant FIT par défaut. Seule "timing" reste réservée à intent, et
+   uniquement pour des signaux réellement temporels créés avec
+   `signal_group="intent"` explicite par leur collecteur.
+2. **Fraîcheur** — `_signal()`/`persist_signals()` remplaçaient un
+   `observed_at` manquant par `timezone.now()`, faisant bénéficier à tort
+   du multiplicateur "très frais" un fait dont la date réelle est inconnue.
+   Corrigé : un signal `intent` sans date réelle explicite garde
+   `observed_at=None` ("date inconnue", poids nul) ; un signal FIT continue
+   de recevoir `now()` (observation d'un état présent, sans impact sur le
+   score puisque FIT n'est jamais pondéré par fraîcheur).
+3. **Vrais signaux temporels** — deux nouveaux collecteurs :
+   `SiteChangeSignalCollector` (technologie apparue depuis un scan
+   antérieur réel, datée par comparaison) et `RecentActivitySignalCollector`
+   (recrutement Growth/actualité récente, lus depuis `ProspectEvidence`
+   avec une date d'événement réelle explicite — sans date, aucun signal ;
+   aucun scraping LinkedIn).
+4. **Migration 0007** — corrigée alors qu'elle n'avait jamais été déployée :
+   n'importe plus `prospects.services.signals` (mapping et fingerprint
+   figés en copie locale dans la migration) ; `source_kind` historique
+   distingue maintenant "technology" (catégories analytics/advertising/
+   crm/competitor/acquisition) de "website" (le reste). Rechaîne complète
+   0006→0011 revérifiée sur Postgres 18 réel avec 40 prospects/60 signaux
+   d'origine mixte — zéro perte, zéro signal historique classé intent.
+5. **Garde-fous de campagne restaurés** — `advance_campaign_prospect()`
+   vérifie maintenant `campaign.is_sendable` en tout premier (aucune action
+   sur une campagne brouillon/non validée), `daily_send_limit`/`total_limit`
+   (tous canaux confondus), et la politique domaine/jour existante
+   (`campaign_sending.py::_domain`) pour l'étape e-mail. Tests de
+   contournement volontaire inclus (campagne draft, active-mais-non-validée,
+   appels répétés, limites dépassées).
+6. **Garde-fous appliqués aux e-mails** — `AgentBrief.detected_need`
+   présentait `product.target_problem` (générique) comme un besoin DÉTECTÉ
+   chez le prospect. Corrigé : signaux intent réellement observés cités
+   nommément si présents, sinon le problème générique est explicitement
+   étiqueté comme tel ("Aucun signal spécifique confirmé..."). Testé sur
+   l'e-mail RÉELLEMENT rendu (`render_predictneed_email`), pas seulement
+   sur le service qui le construit.
+7. **Priorisation** — `predictneed_acquisition_score` ("Priorité")
+   ignorait INTENT/ENGAGEMENT. Corrigé en étendant la formule pondérée
+   existante (`DEFAULT_ICP_WEIGHTS` + `ICPProfile.effective_weights()`) :
+   intent (15%) et engagement (10%) sont désormais des composantes du même
+   score canonique — pas un cinquième score concurrent. Un ICPProfile
+   existant sans ces clés en hérite automatiquement (rétrocompatible, sans
+   migration). Tri par défaut de la liste Prospects corrigé pour utiliser
+   explicitement `-predictneed_acquisition_score` (il retombait auparavant
+   sur `Prospect.Meta.ordering`, basé sur l'ancien `priority_score`
+   technique jamais mis à jour par PredictNeed IA).
+8. **A/B/C refaits** — A a maintenant un site aussi mature que B (mêmes
+   signaux FIT issus du quick scan) mais aucun événement temporel réel :
+   Intent reste à 0, statut "Aucun signal récent", jamais "probable"/
+   "forte". B ajoute un véritable événement daté (recrutement Growth via
+   `RecentActivitySignalCollector`) : Intent clairement supérieur à A. C
+   ajoute l'engagement PredictNeed réel : Engagement nettement supérieur à
+   B. Ce test est la preuve que le moteur distingue désormais maturité
+   (FIT) et intention actuelle (INTENT).

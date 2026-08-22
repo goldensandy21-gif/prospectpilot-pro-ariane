@@ -55,6 +55,24 @@ class ProspectListMission6Tests(LoggedInTestCase):
         response = self.client.get(reverse("prospect_list"), {"nba": "WAIT"})
         self.assertContains(response, self.prospect.name)
 
+    def test_default_sort_is_by_predictneed_acquisition_score_not_legacy_priority_score(self):
+        """Correctif d'audit (section 7) : le tri par défaut doit refléter
+        le score canonique "Priorité" (qui incorpore Intent/Engagement),
+        jamais l'ancien priority_score technique hérité de Meta.ordering."""
+        high = make_prospect(name="Haute priorite", siret="90000000000001", selected_for_prospecting=True)
+        high.predictneed_acquisition_score = 90
+        high.priority_score = 10  # légua délibérément à l'inverse de predictneed_acquisition_score
+        high.save(update_fields=["predictneed_acquisition_score", "priority_score"])
+
+        low = make_prospect(name="Basse priorite", siret="90000000000002", selected_for_prospecting=True)
+        low.predictneed_acquisition_score = 20
+        low.priority_score = 95
+        low.save(update_fields=["predictneed_acquisition_score", "priority_score"])
+
+        response = self.client.get(reverse("prospect_list"))
+        content = response.content.decode()
+        self.assertLess(content.index(high.name), content.index(low.name))
+
     def test_no_top_level_menu_item_added(self):
         response = self.client.get(reverse("prospect_list"))
         content = response.content.decode()

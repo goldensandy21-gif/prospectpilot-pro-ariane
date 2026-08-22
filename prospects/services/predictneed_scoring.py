@@ -1,7 +1,14 @@
 """ETAPE 13 — Score PredictNeed IA.
 
 predictneed_acquisition_score = combinaison pondérée (ICPProfile.weights) de :
-icp_fit_score, need_score, acquisition_maturity_score, contactability_score, timing_score.
+icp_fit_score, need_score, acquisition_maturity_score, contactability_score,
+timing_score, intent_score, engagement_score.
+
+Correctif d'audit (section 7) : intent_score/engagement_score (Mission 6,
+pondérés par fraîcheur) sont maintenant des composantes du score canonique
+"Priorité" — pas un cinquième score concurrent. Avant de les lire,
+score_prospect() les rafraîchit via recompute_acquisition_scores() pour ne
+jamais utiliser des valeurs obsolètes.
 
 Toutes les raisons du score sont enregistrées (predictneed_score_reasons) pour qu'un
 utilisateur puisse comprendre exactement pourquoi une entreprise a obtenu 86/100.
@@ -150,15 +157,28 @@ def _hard_exclusion(prospect, icp):
     return ""
 
 
+DEFAULT_WEIGHTS_FALLBACK = {
+    "icp_fit": 25, "need": 15, "acquisition_maturity": 15,
+    "contactability": 15, "timing": 5, "intent": 15, "engagement": 10,
+}
+
+
 def score_prospect(prospect, icp=None, product=None, persist=True):
     icp = icp or prospect.predictneed_icp
     exclusion_reason = _hard_exclusion(prospect, icp)
+
+    # Rafraîchit intent_score/engagement_score AVANT de les lire —
+    # sinon la "Priorité" utiliserait des valeurs obsolètes (correctif d'audit).
+    from .acquisition_scores import recompute_acquisition_scores
+    recompute_acquisition_scores(prospect, persist=persist)
 
     icp_fit, icp_reasons = compute_icp_fit_score(prospect, icp)
     need, need_reasons = compute_need_score(prospect)
     maturity, maturity_reasons = compute_acquisition_maturity_score(prospect)
     contactability, contact_reasons = compute_contactability_score(prospect)
     timing, timing_reasons = compute_timing_score(prospect)
+    intent = prospect.intent_score
+    engagement = prospect.engagement_score
 
     outbound_eligible = contactability > 0 and not exclusion_reason
     outbound_reason = "" if outbound_eligible else (exclusion_reason or "Aucune adresse e-mail exploitable.")
@@ -168,15 +188,15 @@ def score_prospect(prospect, icp=None, product=None, persist=True):
         grade = "D"
         reasons = [f"EXCLUSION : {exclusion_reason}"]
     else:
-        weights = icp.effective_weights() if icp else {
-            "icp_fit": 30, "need": 25, "acquisition_maturity": 20, "contactability": 15, "timing": 10,
-        }
+        weights = icp.effective_weights() if icp else DEFAULT_WEIGHTS_FALLBACK
         final_score = _clip(
             icp_fit * weights["icp_fit"] / 100
             + need * weights["need"] / 100
             + maturity * weights["acquisition_maturity"] / 100
             + contactability * weights["contactability"] / 100
             + timing * weights["timing"] / 100
+            + intent * weights.get("intent", 0) / 100
+            + engagement * weights.get("engagement", 0) / 100
         )
         grade = _grade_for(final_score)
         reasons = (
@@ -185,6 +205,8 @@ def score_prospect(prospect, icp=None, product=None, persist=True):
             + [f"Maturité acquisition ({maturity}/100, poids {weights['acquisition_maturity']:.0f}%) : " + "; ".join(maturity_reasons[:4] or ["aucun signal spécifique"])]
             + [f"Contactabilité ({contactability}/100, poids {weights['contactability']:.0f}%) : " + "; ".join(contact_reasons[:4])]
             + [f"Timing ({timing}/100, poids {weights['timing']:.0f}%) : " + "; ".join(timing_reasons[:2])]
+            + [f"Intent ({intent}/100, poids {weights.get('intent', 0):.0f}%) : " + "; ".join((prospect.intent_score_reasons or [])[:3] or ["aucun signal d'intention"])]
+            + [f"Engagement ({engagement}/100, poids {weights.get('engagement', 0):.0f}%) : " + "; ".join((prospect.engagement_score_reasons or [])[:3] or ["aucun engagement enregistré"])]
         )
 
     result = {
