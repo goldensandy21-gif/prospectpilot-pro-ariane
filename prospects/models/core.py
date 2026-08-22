@@ -547,6 +547,11 @@ class ContactLog(models.Model):
         ("invitation_accepted", "Invitation acceptée"),
         ("invitation_declined", "Invitation refusée ou expirée"),
         ("message_prepared", "Message préparé (non envoyé)"),
+        # Correctif d'audit (round 2) : un échec provider doit être un état
+        # explicite et jamais silencieusement converti en "préparé" (qui
+        # laisserait croire à une réussite) — voir linkedin_orchestration.py.
+        ("invitation_failed", "Échec d'envoi de l'invitation"),
+        ("message_failed", "Échec d'envoi du message"),
     ]
     prospect = models.ForeignKey(Prospect, related_name="contact_logs", on_delete=models.CASCADE)
     # Mission 6, section 11 — même principe que EmailSend.campaign_prospect/

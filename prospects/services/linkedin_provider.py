@@ -65,6 +65,19 @@ class MockLinkedInProvider(LinkedInProvider):
         return {"status": "sent", "detail": "Message envoyé (mock)."}
 
 
+class MockFailingLinkedInProvider(LinkedInProvider):
+    """Réservé aux tests automatisés — simule systématiquement un échec
+    provider (ex. panne réseau, limite de la plateforme atteinte), pour
+    vérifier que ProspectPilot ne convertit jamais un échec en succès."""
+    name = "mock_failing"
+
+    def send_invitation(self, profile_url, note=""):
+        return {"status": "failed", "detail": "Échec simulé (test) : panne réseau."}
+
+    def send_message(self, profile_url, message):
+        return {"status": "failed", "detail": "Échec simulé (test) : limite de la plateforme atteinte."}
+
+
 def get_default_provider():
     """Provider par défaut de l'application : toujours `manual` tant
     qu'aucune intégration API autorisée n'est configurée. Ne jamais faire de

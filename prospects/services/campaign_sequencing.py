@@ -28,11 +28,21 @@ qui n'avaient pas été repris par ce module au premier passage :
 - Politique domaine/jour existante (`services/campaign_sending.py::_domain`)
   réappliquée à l'étape e-mail : jamais deux e-mails au même domaine le
   même jour pour une campagne.
+
+Correctif d'audit (round 2) — concurrence : `daily_send_limit`/`total_limit`
+sont des quotas GLOBAUX à la campagne, pas au CampaignProspect. Verrouiller
+seulement la ligne CampaignProspect ne protège pas deux workers qui
+avancent CONCURREMMENT deux prospects différents de la MÊME campagne — les
+deux pourraient lire le même compteur avant que l'un des deux ne commit.
+`Campaign` est donc explicitement verrouillée (`select_for_update()`,
+séparément de CampaignProspect) en tout début de transaction : toute
+vérification de quota pour une campagne donnée est ainsi sérialisée entre
+tous les appelants concurrents, quel que soit le CampaignProspect visé.
 """
 from django.db import transaction
 from django.utils import timezone
 
-from ..models import CampaignProspect, ContactLog, ConversionEvent, EmailSend, Suppression
+from ..models import Campaign, CampaignProspect, ContactLog, ConversionEvent, EmailSend, Suppression
 from .campaign_sending import _domain
 from .linkedin_orchestration import linkedin_profile_url, send_invitation, send_message
 from .message_guardrails import build_personalization_snippet
@@ -144,15 +154,27 @@ def _mark_step_done(campaign_prospect, step, now):
 
 def advance_campaign_prospect(campaign_prospect_id, now=None, linkedin_provider=None):
     """Point d'entrée unique de la séquence multicanal. Toujours appelé avec
-    un PK (pas une instance) pour pouvoir verrouiller la ligne — évite deux
-    exécutions concurrentes de la même étape pour le même prospect."""
+    un PK (pas une instance) pour pouvoir verrouiller la ligne.
+
+    Correctif d'audit (round 2) : verrouille explicitement la ligne
+    `Campaign` (en plus de `CampaignProspect`) — daily_send_limit/
+    total_limit sont des quotas GLOBAUX à la campagne, donc leur vérification
+    doit être sérialisée au niveau de la campagne, pas seulement du
+    CampaignProspect visé, sans quoi deux workers avançant CONCURREMMENT
+    deux prospects différents de la même campagne pourraient tous les deux
+    lire un quota non encore consommé par l'autre."""
     now = now or timezone.now()
 
     with transaction.atomic():
-        campaign_prospect = CampaignProspect.objects.select_for_update().select_related(
-            "campaign__sequence", "prospect",
-        ).get(pk=campaign_prospect_id)
-        campaign = campaign_prospect.campaign
+        # of=("self",) : `Campaign.sequence` est une FK nullable
+        # (SET_NULL) — select_related() génère donc un LEFT OUTER JOIN, et
+        # PostgreSQL refuse FOR UPDATE sur le côté nullable d'un outer join.
+        # On ne verrouille que la ligne Campaign elle-même, jamais la ligne
+        # EmailSequence jointe (qui n'a pas besoin de l'être ici).
+        campaign_id = CampaignProspect.objects.only("campaign_id").get(pk=campaign_prospect_id).campaign_id
+        campaign = Campaign.objects.select_for_update(of=("self",)).select_related("sequence").get(pk=campaign_id)
+        campaign_prospect = CampaignProspect.objects.select_for_update(of=("self",)).select_related("prospect").get(pk=campaign_prospect_id)
+        campaign_prospect.campaign = campaign  # réutilise l'instance déjà verrouillée, évite une requête en double
 
         # Garde-fou restauré (audit) : une campagne brouillon/non validée ne
         # doit produire AUCUN envoi réel, sur aucun canal — vérifié en tout
@@ -229,6 +251,13 @@ def _execute_step(campaign_prospect, step, now, linkedin_provider):
         log.campaign_prospect = campaign_prospect
         log.email_step = step
         log.save(update_fields=["campaign_prospect", "email_step"])
+        # Correctif d'audit (round 2) : un échec provider ne doit JAMAIS être
+        # traité comme une réussite — l'étape n'avance pas (current_step
+        # inchangé), pour permettre un nouvel essai (retry/backoff) au
+        # prochain appel, ou une intervention humaine (l'échec reste visible
+        # dans ContactLog).
+        if log.outcome == "invitation_failed":
+            return {"action": "linkedin_failed", "outcome": log.outcome, "step": step.name, "error": log.metadata.get("detail", "")}
         _mark_step_done(campaign_prospect, step, now)
         return {"action": "linkedin_invitation", "outcome": log.outcome, "step": step.name}
 
@@ -241,6 +270,8 @@ def _execute_step(campaign_prospect, step, now, linkedin_provider):
         log.campaign_prospect = campaign_prospect
         log.email_step = step
         log.save(update_fields=["campaign_prospect", "email_step"])
+        if log.outcome == "message_failed":
+            return {"action": "linkedin_failed", "outcome": log.outcome, "step": step.name, "error": log.metadata.get("detail", "")}
         _mark_step_done(campaign_prospect, step, now)
         return {"action": "linkedin_message", "outcome": log.outcome, "step": step.name}
 

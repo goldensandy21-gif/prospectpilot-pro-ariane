@@ -176,12 +176,18 @@ def seed_icp_profiles(product):
                 "excluded_signals": [],
                 "excluded_domains": [],
                 "excluded_sectors": [],
+                # Correctif d'audit (Mission 6) : mêmes valeurs que
+                # DEFAULT_ICP_WEIGHTS (models/acquisition.py) — incluant
+                # intent/engagement dès la création, pour que tout nouvel
+                # ICP seedé utilise directement la formule à jour.
                 "weights": {
-                    "icp_fit": 30,
-                    "need": 25,
-                    "acquisition_maturity": 20,
+                    "icp_fit": 25,
+                    "need": 15,
+                    "acquisition_maturity": 15,
                     "contactability": 15,
-                    "timing": 10,
+                    "timing": 5,
+                    "intent": 15,
+                    "engagement": 10,
                 },
                 "minimum_outbound_score": definition["minimum_outbound_score"],
             },

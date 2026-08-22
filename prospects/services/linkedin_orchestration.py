@@ -11,7 +11,12 @@ from .linkedin_provider import get_default_provider
 STATUS_TO_OUTCOME = {
     "prepared": {"invitation": "invitation_prepared", "message": "message_prepared"},
     "sent": {"invitation": "invitation_sent", "message": "sent"},
+    "failed": {"invitation": "invitation_failed", "message": "message_failed"},
 }
+# Correctif d'audit (round 2) : un statut provider inconnu/inattendu doit
+# être traité en échec (fail-safe), jamais silencieusement en "préparé" —
+# qui laisserait croire à tort qu'une action a réussi.
+_UNKNOWN_STATUS_OUTCOME = {"invitation": "invitation_failed", "message": "message_failed"}
 
 
 def linkedin_profile_url(prospect):
@@ -32,7 +37,7 @@ def send_invitation(prospect, provider=None, note=""):
 
     provider = provider or get_default_provider()
     result = provider.send_invitation(profile_url, note=note)
-    outcome = STATUS_TO_OUTCOME.get(result["status"], {}).get("invitation", "invitation_prepared")
+    outcome = STATUS_TO_OUTCOME.get(result["status"], _UNKNOWN_STATUS_OUTCOME)["invitation"]
 
     return ContactLog.objects.create(
         prospect=prospect, channel="linkedin", subject="Invitation LinkedIn",
@@ -48,7 +53,7 @@ def send_message(prospect, message, provider=None):
 
     provider = provider or get_default_provider()
     result = provider.send_message(profile_url, message)
-    outcome = STATUS_TO_OUTCOME.get(result["status"], {}).get("message", "message_prepared")
+    outcome = STATUS_TO_OUTCOME.get(result["status"], _UNKNOWN_STATUS_OUTCOME)["message"]
 
     return ContactLog.objects.create(
         prospect=prospect, channel="linkedin", subject="Message LinkedIn",

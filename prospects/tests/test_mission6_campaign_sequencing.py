@@ -17,7 +17,7 @@ from prospects.models import (
 )
 from prospects.services.campaign_sequencing import advance_campaign_prospect, run_campaign_sequences
 from prospects.services.linkedin_orchestration import record_invitation_accepted, record_invitation_declined
-from prospects.services.linkedin_provider import MockLinkedInProvider
+from prospects.services.linkedin_provider import MockFailingLinkedInProvider, MockLinkedInProvider
 from prospects.tests.factories import make_campaign, make_campaign_prospect, make_icp, make_prospect, make_product, make_public_email
 
 
@@ -431,3 +431,64 @@ class RunCampaignSequencesTests(TestCase):
 
         results = run_campaign_sequences(campaign)
         self.assertEqual(results, [])
+
+
+class LinkedInProviderFailureTests(TestCase):
+    """Correctif d'audit (round 2) : un échec provider explicite ne doit
+    jamais être converti en "préparé"/réussite, ne doit jamais faire avancer
+    l'étape, et doit rester visible pour un nouvel essai ou une
+    intervention humaine."""
+
+    def setUp(self):
+        self.product = make_product()
+        self.icp = make_icp(self.product)
+        self.campaign = _validated_campaign(self.product, self.icp)
+        self.sequence, self.connect, self.message, self.email_step = _multichannel_sequence(self.product)
+        self.campaign.sequence = self.sequence
+        self.campaign.save(update_fields=["sequence"])
+        self.prospect = make_prospect()
+        _with_linkedin_contact(self.prospect)
+        self.cp = make_campaign_prospect(self.campaign, self.prospect)
+        self.now = timezone.now()
+
+    def test_failed_invitation_is_recorded_explicitly_not_as_prepared(self):
+        result = advance_campaign_prospect(self.cp.pk, now=self.now, linkedin_provider=MockFailingLinkedInProvider())
+        self.assertEqual(result["action"], "linkedin_failed")
+
+        log = ContactLog.objects.get(campaign_prospect=self.cp, email_step=self.connect)
+        self.assertEqual(log.outcome, "invitation_failed")
+        self.assertNotIn(log.outcome, ("invitation_prepared", "invitation_sent"))
+
+    def test_failed_invitation_does_not_advance_current_step(self):
+        advance_campaign_prospect(self.cp.pk, now=self.now, linkedin_provider=MockFailingLinkedInProvider())
+        self.cp.refresh_from_db()
+        self.assertIsNone(self.cp.current_step)
+
+    def test_retry_after_failure_can_succeed(self):
+        advance_campaign_prospect(self.cp.pk, now=self.now, linkedin_provider=MockFailingLinkedInProvider())
+        result = advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(minutes=5), linkedin_provider=MockLinkedInProvider())
+        self.assertEqual(result["action"], "linkedin_invitation")
+        self.cp.refresh_from_db()
+        self.assertEqual(self.cp.current_step_id, self.connect.pk)
+
+    def test_failed_message_is_recorded_explicitly_and_does_not_advance(self):
+        advance_campaign_prospect(self.cp.pk, now=self.now, linkedin_provider=MockLinkedInProvider())
+        invitation_log = ContactLog.objects.get(campaign_prospect=self.cp, email_step=self.connect)
+        record_invitation_accepted(invitation_log)
+
+        result = advance_campaign_prospect(
+            self.cp.pk, now=self.now + timedelta(days=3), linkedin_provider=MockFailingLinkedInProvider(),
+        )
+        self.assertEqual(result["action"], "linkedin_failed")
+        message_log = ContactLog.objects.get(campaign_prospect=self.cp, email_step=self.message)
+        self.assertEqual(message_log.outcome, "message_failed")
+
+        self.cp.refresh_from_db()
+        self.assertEqual(self.cp.current_step_id, self.connect.pk)  # toujours à l'étape 1, pas avancé à l'étape 2
+
+    def test_repeated_failures_do_not_duplicate_indefinitely_but_stay_visible(self):
+        provider = MockFailingLinkedInProvider()
+        for offset in range(3):
+            advance_campaign_prospect(self.cp.pk, now=self.now + timedelta(minutes=offset), linkedin_provider=provider)
+        failed_logs = ContactLog.objects.filter(campaign_prospect=self.cp, outcome="invitation_failed")
+        self.assertEqual(failed_logs.count(), 3)  # chaque tentative reste tracée pour audit humain
