@@ -447,3 +447,64 @@ total) :
    ajoute l'engagement PredictNeed réel : Engagement nettement supérieur à
    B. Ce test est la preuve que le moteur distingue désormais maturité
    (FIT) et intention actuelle (INTENT).
+
+## Correctifs suite à audit indépendant, round 2
+
+Un second audit a confirmé la majorité des correctifs du round 1 mais
+trouvé 8 points supplémentaires. Tous corrigés, 18 nouveaux tests (346 au
+total, dont 1 `TransactionTestCase` PostgreSQL) :
+
+1. **Fraîcheur INTENT** — `signal_effective_impact()` retombait encore sur
+   `detected_at` quand `observed_at` était `None`, y compris pour un signal
+   intent. Corrigé : pour `signal_group="intent"`, `observed_at` est la
+   SEULE date acceptée, jamais de repli. `compute_intent_score()` corrigé
+   en profondeur : la base de 20 points ne s'applique plus dès qu'une ligne
+   intent existe, mais seulement s'il existe au moins un signal à impact
+   actuel non nul.
+2. **Site Change** — `SiteChangeSignalCollector` concluait qu'une
+   technologie était nouvelle simplement parce qu'une AUTRE technologie du
+   prospect était ancienne, sans jamais prouver son absence lors d'un scan
+   antérieur. Entièrement repensé : compare les deux `SiteAuditSummary` les
+   plus récents d'un prospect (instantané réel et daté, déjà existant —
+   aucun deuxième système de snapshots créé) ; absente du précédent ET
+   présente dans l'actuel, sinon aucun signal.
+3. **Alimentation réelle** — `RecentActivitySignalCollector` n'avait aucune
+   source réelle et a été retiré de `DEFAULT_COLLECTORS` (documenté
+   honnêtement comme dormant, candidate réelle nommée pour une prochaine
+   session : API publique France Travail). `SiteChangeSignalCollector`,
+   lui, est réellement branché dans le workflow de production
+   (`tasks.py::audit_site_task`, juste après chaque `SiteAuditSummary`) —
+   testé avec la tâche Celery réelle (mockée seulement pour le crawl HTTP).
+4. **Recalcul temps réel** — `persist_signals()` et le webhook PredictNeed
+   appellent maintenant `score_prospect()` (intent/engagement ET "Priorité"
+   canonique) dès qu'un signal ou événement d'engagement réel apparaît.
+   Lecture seule sur l'existant : aucune boucle, aucune écriture chez
+   PredictNeed IA.
+5. **Concurrence campagne** — `advance_campaign_prospect()` verrouille
+   désormais explicitement `Campaign` (`select_for_update(of=("self",))`,
+   nécessaire car `Campaign.sequence` est une FK nullable — PostgreSQL
+   refuse `FOR UPDATE` sur le côté nullable d'un outer join sans cette
+   restriction, confirmé par une erreur réelle avant correctif), en plus de
+   `CampaignProspect` : les quotas `daily_send_limit`/`total_limit` sont
+   globaux à la campagne, leur vérification doit donc être sérialisée à ce
+   niveau. Prouvé par un `TransactionTestCase` à deux threads/connexions
+   réels sur Postgres 18 (5/5 exécutions stables).
+6. **Échec provider LinkedIn** — `ContactLog.OUTCOMES` gagne
+   `invitation_failed`/`message_failed`, jamais convertis silencieusement
+   en "préparé" (y compris pour un statut provider inconnu, traité
+   fail-safe). Une étape en échec n'avance jamais `current_step` — reste
+   rejouable (retry) et visible pour une intervention humaine.
+7. **Poids ICP** — nouvelle migration explicite et déterministe (jamais une
+   fusion+renormalisation silencieuse à la lecture) : les profils déjà
+   personnalisés voient leurs 5 poids historiques ramenés à 75% du total en
+   conservant leurs proportions relatives exactes, intent=15/engagement=10
+   complètent les 25% restants. Les profils jamais personnalisés ne sont
+   pas touchés. `seed_data.py` corrigé pour écrire directement les
+   nouveaux poids.
+8. **Migrations depuis la vraie baseline production** — chaîne complète
+   0004→0013 (la baseline production connue avant Mission 5) testée en une
+   seule fois sur Postgres 18 réel, avec des données représentatives sur
+   les 9 modèles demandés (Prospect, PublicEmail, PublicPhone,
+   PublicContactForm, PublicSocialLink, ProspectSignal, ProspectTechnology,
+   SearchCandidate, ContactPerson) : PKs identiques avant/après, zéro perte
+   sur aucune table.
