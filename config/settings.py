@@ -149,3 +149,10 @@ DROPCONTACT_API_KEY = os.getenv("DROPCONTACT_API_KEY", "")
 APOLLO_API_KEY = os.getenv("APOLLO_API_KEY", "")
 KASPR_API_KEY = os.getenv("KASPR_API_KEY", "")
 LEMLIST_API_KEY = os.getenv("LEMLIST_API_KEY", "")
+
+# Mission 7E, section 11 — France Travail (offres d'emploi), OAuth2
+# client-credentials (comme GOOGLE_OAUTH_CLIENT_ID/SECRET ci-dessus, pas un
+# simple _API_KEY). Vide par défaut : la source reste dormante tant que ces
+# deux variables ne sont pas configurées — voir services/france_travail.py.
+FRANCE_TRAVAIL_CLIENT_ID = os.getenv("FRANCE_TRAVAIL_CLIENT_ID", "")
+FRANCE_TRAVAIL_CLIENT_SECRET = os.getenv("FRANCE_TRAVAIL_CLIENT_SECRET", "")

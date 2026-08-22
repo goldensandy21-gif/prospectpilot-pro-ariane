@@ -237,26 +237,29 @@ class RecentActivitySignalCollector(SignalCollector):
     fait, pas date à laquelle le fait s'est produit). Sans date réelle
     explicite, aucun signal n'est créé : silence plutôt qu'invention.
 
-    ÉTAT (correctif d'audit, round 2) — déclaré HONNÊTEMENT dormant :
-    aucune source actuelle ne crée de ProspectEvidence avec ces
-    `field_name`. Pas dans `DEFAULT_COLLECTORS` (voir plus bas) pour ne
-    jamais laisser croire qu'il est actif. Aucune connexion réseau ici — ce
-    collecteur normalise une preuve déjà présente, il ne va pas la chercher.
+    ÉTAT (mission 7E) — désormais ACTIF et dans `DEFAULT_COLLECTORS` : le
+    site propre du prospect (`CompanyWebsiteSource`, via
+    `crawler.py::_extract_temporal_events`) alimente réellement
+    `job_posting_growth`/`news_acquisition`/`dated_content_published` à
+    partir de dates structurées JSON-LD (schema.org JobPosting/Article/
+    BlogPosting/NewsArticle) ou, à défaut, d'une balise meta de date sur une
+    page carrière/actualité reconnue — jamais une date devinée. Aucune
+    connexion réseau ici — ce collecteur normalise une preuve déjà
+    présente, il ne va pas la chercher.
 
-    Candidate réelle documentée pour une prochaine session, jamais implémentée
-    faute de clé d'accès disponible ici : l'API publique et gratuite
-    "Offres d'emploi" de France Travail (api.francetravail.io, inscription
-    développeur gratuite, données officielles avec date de publication
-    réelle) pourrait alimenter `job_posting_growth` avec des dates fiables.
-    Aucune autre source gratuite/fiable identifiée pour `news_acquisition`
-    à ce stade. Jamais de scraping LinkedIn — explicitement exclu par la
-    mission."""
+    France Travail (api.francetravail.io, offres d'emploi avec date de
+    publication officielle) documenté et prêt à alimenter
+    `job_posting_growth` avec une confiance encore meilleure dès que des
+    identifiants seront disponibles — voir services/france_travail.py,
+    actuellement dormant. Jamais de scraping LinkedIn — explicitement
+    exclu par la mission."""
     name = "recent_activity"
     source_kind = "open_web"
 
     FIELD_LABELS = {
         "job_posting_growth": "Recrutement Growth/Marketing/CRO récent",
         "news_acquisition": "Actualité récente liée acquisition/conversion/analytics",
+        "dated_content_published": "Nouveau contenu Growth/Marketing/CRO publié",
     }
 
     def collect(self, prospect):
@@ -283,18 +286,19 @@ class RecentActivitySignalCollector(SignalCollector):
         return signals
 
 
-# Correctif d'audit (round 2) : RecentActivitySignalCollector n'est PAS dans
-# DEFAULT_COLLECTORS. Il est correct et testé, mais aucune source réelle ne
-# crée aujourd'hui de ProspectEvidence(field_name="job_posting_growth"/
-# "news_acquisition") — l'inclure ici donnerait l'illusion trompeuse d'un
-# collecteur actif alors qu'il ne produit jamais rien en production. Voir la
-# docstring de la classe : source candidate documentée, pas encore branchée.
+# Mission 7E : RecentActivitySignalCollector rejoint DEFAULT_COLLECTORS —
+# CompanyWebsiteSource (enrichment.py) crée désormais réellement des
+# ProspectEvidence(field_name="job_posting_growth"/"news_acquisition"/
+# "dated_content_published") à partir de dates structurées trouvées sur le
+# site du prospect. Voir la docstring de la classe pour le détail de la
+# source.
 DEFAULT_COLLECTORS = [
     TechnologySignalCollector(),
     QuickScanSignalCollector(),
     SocialPresenceSignalCollector(),
     DecisionMakerSignalCollector(),
     SiteChangeSignalCollector(),
+    RecentActivitySignalCollector(),
 ]
 
 

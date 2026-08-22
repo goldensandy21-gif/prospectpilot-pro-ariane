@@ -10,6 +10,8 @@ from django.conf import settings
 from .robots import RobotsPolicy
 from .technology import detect_technologies
 from .people_extraction import extract_people_from_page
+from .structured_data import extract_json_ld_blocks, find_dated_content, find_meta_published_time
+from .temporal_signals import classify_dated_fact
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 PHONE_RE = re.compile(r"(?:\+33|0)[1-9](?:[ .-]?\d{2}){4}")
@@ -98,6 +100,49 @@ def analyze_contact_forms(soup, url):
         })
     return forms
 
+_CAREER_URL_TERMS = ("carrieres", "carrières", "recrutement", "jobs", "emploi")
+_NEWS_URL_TERMS = ("blog", "actualites", "actualités", "news", "presse", "press")
+
+
+def _extract_temporal_events(url, soup, lower_text, json_ld_blocks):
+    """Mission 7E — faits datés réels de cette page (jamais collected_at).
+    Priorité aux dates structurées JSON-LD (fiables) ; à défaut, repli sur la
+    balise meta de date, seulement si l'URL de la page elle-même indique un
+    type de contenu (carrière/actu) permettant de classer le fait sans
+    deviner."""
+    events = []
+    dated_facts = find_dated_content(json_ld_blocks)
+    for fact in dated_facts:
+        field_name = classify_dated_fact(fact)
+        if field_name:
+            events.append({
+                "field_name": field_name, "event_date": fact["date"],
+                "headline": fact["headline"], "source_method": "json_ld_dated_content",
+            })
+    if events:
+        return events
+
+    meta_date = find_meta_published_time(soup)
+    if not meta_date:
+        return events
+    path = urlparse(url).path.lower()
+    if any(term in path for term in _CAREER_URL_TERMS):
+        content_type = "jobposting"
+    elif any(term in path for term in _NEWS_URL_TERMS):
+        content_type = "article"
+    else:
+        return events
+    # Le texte complet de la page sert seulement à vérifier la présence d'un
+    # mot-clé pertinent (pas de "headline" structuré disponible sans JSON-LD).
+    field_name = classify_dated_fact({"content_type": content_type, "headline": lower_text})
+    if field_name:
+        events.append({
+            "field_name": field_name, "event_date": meta_date,
+            "headline": "", "source_method": "meta_published_time",
+        })
+    return events
+
+
 def analyze_html(url, response, depth):
     soup = BeautifulSoup(response.text, "lxml")
     text = soup.get_text(" ", strip=True)
@@ -148,6 +193,8 @@ def analyze_html(url, response, depth):
     found_emails = sorted(set(EMAIL_RE.findall(text) + mailto_emails))[:20]
     found_phones = sorted(set(PHONE_RE.findall(text) + tel_phones))[:20]
     contact_forms = analyze_contact_forms(soup, url)
+    json_ld_blocks = extract_json_ld_blocks(soup)
+    temporal_events = _extract_temporal_events(url, soup, lower, json_ld_blocks)
 
     return {
         "url":url, "depth":depth, "http_status":response.status_code,
@@ -173,6 +220,7 @@ def analyze_html(url, response, depth):
         "found_contact_forms":contact_forms[:10],
         "found_social_links":social_links[:20],
         "found_people":extract_people_from_page(url, soup),
+        "found_temporal_events":temporal_events,
         "technologies":detect_technologies(response.text, dict(response.headers)),
         "issues":issues,
         "_internal_urls":list(dict.fromkeys(internal)),

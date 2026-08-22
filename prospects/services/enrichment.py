@@ -89,6 +89,19 @@ SOURCE_DEFINITIONS = {
         "api_key_env": "LEMLIST_API_KEY",
         "legal_notes": "Connecteur préparé pour synchronisation/campagnes selon API officielle.",
     },
+    "france_travail": {
+        "name": "France Travail — Offres d'emploi",
+        "source_type": "open_web",
+        "requires_api_key": True,
+        "api_key_env": "FRANCE_TRAVAIL_CLIENT_ID",
+        "base_url": "https://api.francetravail.io",
+        "legal_notes": (
+            "API publique et gratuite (OAuth2 client-credentials, "
+            "FRANCE_TRAVAIL_CLIENT_ID/FRANCE_TRAVAIL_CLIENT_SECRET). "
+            "Dormant tant que ces identifiants ne sont pas configurés — "
+            "voir docs/WEB_DATA_INTELLIGENCE.md."
+        ),
+    },
 }
 
 
@@ -317,6 +330,27 @@ class CompanyWebsiteSource:
                     raw_payload=link,
                 ))
 
+            # Mission 7E — Temporal Signal Intelligence : faits datés réels
+            # trouvés sur cette même page (structured data / meta de date),
+            # jamais collected_at. Confiance plus haute pour une date
+            # structurée JSON-LD que pour un repli sur balise meta.
+            for event in page.get("found_temporal_events", []):
+                is_structured = event.get("source_method") == "json_ld_dated_content"
+                candidates.append(EvidenceCandidate(
+                    field_name=event["field_name"],
+                    # Inclut l'URL de la page dans la valeur (donc dans la clé
+                    # de dédoublonnage prospect+field_name+normalized_value) :
+                    # un repli meta sans titre ne doit jamais écraser un autre
+                    # évènement daté trouvé sur une page différente.
+                    value=event.get("headline") or f"{event['field_name']} — {page_url}",
+                    value_type="other",
+                    confidence_score=85 if is_structured else 55,
+                    verification_status="verified" if is_structured else "format_valid",
+                    source_key=self.key,
+                    source_url=page_url,
+                    raw_payload={"event_date": event["event_date"], "headline": event.get("headline", ""), "method": event.get("source_method", "")},
+                ))
+
             # Mission 7C — People Discovery : personnes trouvées sur cette même
             # page (schema.org Person, ou heuristique texte sur une page
             # équipe reconnue), déjà extraites en un seul passage par
@@ -385,6 +419,11 @@ class ExternalB2BProviderSource:
         )]
 
 
+def _france_travail_source():
+    from .france_travail import FranceTravailSource
+    return FranceTravailSource()
+
+
 SOURCE_CLASSES = {
     "public_registry": PublicRegistrySource,
     "company_website": CompanyWebsiteSource,
@@ -393,6 +432,10 @@ SOURCE_CLASSES = {
     "apollo": lambda: ExternalB2BProviderSource("apollo"),
     "kaspr": lambda: ExternalB2BProviderSource("kaspr"),
     "lemlist": lambda: ExternalB2BProviderSource("lemlist"),
+    # Mission 7E, section 11 — dormant tant qu'aucun identifiant n'est
+    # configuré (voir france_travail.py::is_configured()). Import tardif :
+    # france_travail.py importe EvidenceCandidate depuis ce module.
+    "france_travail": _france_travail_source,
 }
 DEFAULT_SOURCE_KEYS = ["public_registry", "company_website", "common_crawl"]
 
