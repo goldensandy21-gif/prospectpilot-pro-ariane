@@ -1,4 +1,4 @@
 {% extends "base.html" %}{% block content %}
 <section class="login-page"><div class="login-copy"><span class="eyebrow light">PROSPECTION INTELLIGENTE</span><h1>Des données publiques aux prospects réellement prioritaires.</h1><p>Recherche réelle, crawl multi-pages, scoring, rapports et suivi commercial.</p></div>
-<div class="login-card"><h2>Connexion</h2><form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary-custom w-100">Se connecter</button></form><small>Après installation : ariane / ChangeMe123!</small></div></section>
+<div class="login-card"><h2>Connexion</h2><form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary-custom w-100">Se connecter</button></form></div></section>
 {% endblock %}

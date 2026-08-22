@@ -1,3 +1,6 @@
+import os
+from unittest import mock
+
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.test import TestCase
@@ -7,6 +10,11 @@ from prospects.models import Competitor, EmailComplianceProfile, ICPProfile, Pro
 
 
 class InitializeAppIdempotencyTests(TestCase):
+    def setUp(self):
+        env_patcher = mock.patch.dict(os.environ, {"INITIAL_ADMIN_PASSWORD": "test-only-password-not-real"})
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
     def test_running_twice_does_not_duplicate_seed_data(self):
         call_command("initialize_app")
         call_command("initialize_app")
