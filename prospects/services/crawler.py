@@ -5,6 +5,7 @@ import re
 import time
 import httpx
 from bs4 import BeautifulSoup
+from lxml import etree
 from django.conf import settings
 from .robots import RobotsPolicy
 from .technology import detect_technologies
@@ -15,14 +16,19 @@ CTA_TERMS = ["contact", "devis", "réserver", "reservation", "inscription", "com
 BOOKING_TERMS = ["réserver", "reservation", "booking", "prendre rendez-vous", "inscription en ligne"]
 IMPORTANT_PAGE_TERMS = [
     "contact", "mentions", "legales", "légales", "legal", "about", "a-propos",
-    "apropos", "qui-sommes-nous", "equipe", "équipe", "team", "recrutement",
-    "carrieres", "carrières", "jobs", "emploi",
+    "apropos", "qui-sommes-nous", "equipe", "équipe", "team", "collaborateurs",
+    "recrutement", "carrieres", "carrières", "jobs", "emploi",
+    # Mission 7 (Web Deep Discovery) — blog/actualités/presse/auteurs, en plus
+    # des pages déjà couvertes ci-dessus (contact/à propos/équipe/carrières).
+    "blog", "actualites", "actualités", "news", "presse", "press", "auteur",
+    "auteurs", "author", "authors",
 ]
 IMPORTANT_PATHS = [
     "/contact", "/contactez-nous", "/nous-contacter", "/mentions-legales",
     "/mentions-légales", "/a-propos", "/apropos", "/qui-sommes-nous",
-    "/equipe", "/équipe", "/team", "/recrutement", "/carrieres", "/carrières",
-    "/jobs", "/emploi",
+    "/equipe", "/équipe", "/team", "/collaborateurs", "/recrutement",
+    "/carrieres", "/carrières", "/jobs", "/emploi",
+    "/blog", "/actualites", "/actualités", "/news", "/presse", "/press",
 ]
 SOCIAL_PLATFORMS = {
     "linkedin.com": "linkedin",
@@ -182,6 +188,70 @@ def check_links(client, urls, max_links=30):
         except httpx.HTTPError:
             broken += 1
     return broken
+
+_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+
+def _parse_sitemap_xml(content):
+    """Retourne (kind, entries) où kind vaut "urlset" ou "sitemapindex", et
+    entries une liste de (loc, lastmod). Ne lève jamais — XML invalide -> ([])."""
+    try:
+        root = etree.fromstring(content)
+    except etree.XMLSyntaxError:
+        return "", []
+    tag = etree.QName(root.tag).localname
+    entries = []
+    child_tag = "sitemap" if tag == "sitemapindex" else "url"
+    for node in root.findall(f"sm:{child_tag}", _SITEMAP_NS) or root.findall(child_tag):
+        loc = node.findtext("sm:loc", namespaces=_SITEMAP_NS) or node.findtext("loc")
+        lastmod = node.findtext("sm:lastmod", namespaces=_SITEMAP_NS) or node.findtext("lastmod")
+        if loc:
+            entries.append((loc.strip(), (lastmod or "").strip()))
+    return tag, entries
+
+
+def sitemap_urls(start_url, policy=None, max_urls=200, max_child_sitemaps=3):
+    """Découvre les URLs d'un site via son/ses sitemap(s), avec leur `lastmod`
+    quand le site le fournit (mission 7 — signaux temporels fiables). Respecte
+    robots.txt, un seul niveau d'index de sitemaps (anti-abus), et ne lève
+    jamais : toute erreur réseau/XML rend une liste vide pour ce sitemap.
+    Retourne une liste de dicts {"url", "lastmod"} (lastmod peut être "")."""
+    start_url = normalize_url(start_url)
+    policy = policy or RobotsPolicy(start_url).load()
+    parsed = urlparse(start_url)
+    root = f"{parsed.scheme}://{parsed.netloc}"
+
+    candidates = list(policy.sitemaps() or []) or [urljoin(root, "/sitemap.xml")]
+    headers = {"User-Agent": settings.USER_AGENT, "Accept": "application/xml,text/xml"}
+    results = []
+    seen_sitemaps = set()
+
+    with httpx.Client(headers=headers, timeout=12, follow_redirects=True) as client:
+        queue = deque((url, 0) for url in candidates[:max_child_sitemaps])
+        while queue and len(results) < max_urls:
+            sitemap_url, depth = queue.popleft()
+            if sitemap_url in seen_sitemaps or not policy.allowed(sitemap_url):
+                continue
+            seen_sitemaps.add(sitemap_url)
+            try:
+                response = client.get(sitemap_url)
+                if response.status_code >= 400:
+                    continue
+                kind, entries = _parse_sitemap_xml(response.content)
+            except httpx.HTTPError:
+                continue
+            if kind == "sitemapindex" and depth == 0:
+                for loc, _ in entries[:max_child_sitemaps]:
+                    queue.append((loc, depth + 1))
+                continue
+            for loc, lastmod in entries:
+                if same_domain(start_url, loc):
+                    results.append({"url": loc, "lastmod": lastmod})
+                if len(results) >= max_urls:
+                    break
+
+    return results
+
 
 def crawl_site(start_url, max_pages=None, check_broken_links=True):
     start_url = normalize_url(start_url)

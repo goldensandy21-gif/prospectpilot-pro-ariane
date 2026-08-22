@@ -2,6 +2,26 @@ from django.db import models
 from django.contrib.auth.models import User
 import uuid
 
+# Mission 7 (Email Finder) — un seul jeu de niveaux de vérification, partagé
+# par ProspectEvidence, ContactPerson et PublicEmail (jamais de deuxième liste
+# de statuts). public_source_confirmed = valeur vue telle quelle sur une page
+# publique (niveau A) ; domain_mx_valid = domaine avec MX valide mais boîte non
+# confirmée (niveau C, ne veut jamais dire "vérifié") ; pattern_inferred =
+# valeur déduite d'un motif de domaine (niveau B, jamais présentée comme
+# trouvée ou vérifiée).
+EVIDENCE_VERIFICATION_CHOICES = [
+    ("unverified", "Non vérifié"),
+    ("format_valid", "Format valide"),
+    ("public_source_confirmed", "Trouvé sur une page publique"),
+    ("domain_mx_valid", "Domaine avec MX valide"),
+    ("pattern_inferred", "Motif déduit (non confirmé)"),
+    ("deliverability_unknown", "Délivrabilité inconnue"),
+    ("verified", "Vérifié"),
+    ("invalid", "Invalide"),
+    ("blocked", "Bloqué"),
+    ("conflict", "Conflit"),
+]
+
 class Prospect(models.Model):
     STATUS_CHOICES = [
         ("new", "Nouveau"),
@@ -159,8 +179,11 @@ class PublicEmail(models.Model):
         db_index=True
     )
     confidence_score = models.PositiveSmallIntegerField(default=50)
+    # Mission 7 : réutilise les mêmes niveaux que ProspectEvidence/ContactPerson
+    # (aucune deuxième liste de statuts d'e-mail dans le repo).
     verification_status = models.CharField(
         max_length=30,
+        choices=EVIDENCE_VERIFICATION_CHOICES,
         default="format_valid",
         db_index=True,
     )
@@ -383,15 +406,7 @@ class ProspectEvidence(models.Model):
         ("profile", "Profil public"),
         ("other", "Autre"),
     ]
-    VERIFICATION = [
-        ("unverified", "Non vérifié"),
-        ("format_valid", "Format valide"),
-        ("deliverability_unknown", "Délivrabilité inconnue"),
-        ("verified", "Vérifié"),
-        ("invalid", "Invalide"),
-        ("blocked", "Bloqué"),
-        ("conflict", "Conflit"),
-    ]
+    VERIFICATION = EVIDENCE_VERIFICATION_CHOICES
 
     prospect = models.ForeignKey(
         Prospect,

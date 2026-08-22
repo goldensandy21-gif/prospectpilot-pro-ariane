@@ -33,3 +33,11 @@ class RobotsPolicy:
         if not self.available:
             return None
         return self.parser.crawl_delay(settings.USER_AGENT) or self.parser.crawl_delay("*")
+
+    def sitemaps(self):
+        """URLs de sitemap déclarées dans robots.txt (directive `Sitemap:`),
+        ou None si robots.txt est indisponible ou n'en déclare aucune —
+        l'appelant retombe alors sur /sitemap.xml par défaut."""
+        if not self.available:
+            return None
+        return self.parser.site_maps()
