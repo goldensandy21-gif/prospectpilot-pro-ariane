@@ -4,6 +4,9 @@ primary_region = "cdg"
 [build]
   dockerfile = "Dockerfile"
 
+[deploy]
+  release_command = "python manage.py migrate --noinput"
+
 [processes]
   web = "sh -c 'python manage.py migrate --noinput && python manage.py initialize_app && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 180'"
   worker = "celery -A config worker -l info --concurrency=2"
