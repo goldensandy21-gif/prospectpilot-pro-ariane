@@ -198,3 +198,40 @@ d'attente.
 
 Interdiction respectée : aucun `WebProspect`, `LinkedInProspect`, `HunterLead`, `PeopleLead`, ou
 équivalent n'est créé.
+
+---
+
+## Bilan final (Phase G)
+
+Implémenté et vérifié (phases B–F, commits séparés `mission7-web-data-intelligence`) :
+
+- **Web Deep Discovery** : `IMPORTANT_PATHS`/`IMPORTANT_PAGE_TERMS` étendus (blog/actualités/
+  presse/auteurs/collaborateurs) ; `sitemap_urls()` (avec `lastmod`, un seul niveau d'index,
+  robots.txt respecté) ; `structured_data.py` (JSON-LD schema.org). **Réellement actif** dans le
+  crawler et le quick scan (donc dans l'enrichissement et l'audit de site).
+- **People Discovery** : `people_extraction.py` (schema.org Person + heuristique stricte sur page
+  équipe reconnue) → `ContactPerson` via `EnrichmentEngine.store_person()`. **Réellement actif**
+  (`company_website` fait partie de `DEFAULT_SOURCE_KEYS`).
+- **Email Finder** : niveau A (`public_source_confirmed`), niveau B (`pattern_inferred`, ≥2
+  exemples confirmés exigés, jamais écrit dans `ContactPerson.email`/`PublicEmail`), niveau C
+  (`domain_mx_valid`, action explicite, jamais confondu avec "vérifié"). Niveaux A/B **actifs**
+  automatiquement dans `enrich_prospect()` ; niveau C **actif** via un bouton explicite.
+- **Signaux temporels** : `temporal_signals.py` classe les faits datés réels (JSON-LD, repli meta)
+  vers `job_posting_growth`/`news_acquisition`/`dated_content_published`. `RecentActivitySignalCollector`
+  **réellement actif** (rejoint `DEFAULT_COLLECTORS`) — testé A/B/C : sans date réelle, aucun
+  Intent ; avec une date réelle, Intent avec `observed_at` exact.
+- **France Travail** : adaptateur `france_travail.py` construit et testé (HTTP entièrement mocké),
+  **dormant** — aucun identifiant `FRANCE_TRAVAIL_CLIENT_ID`/`SECRET` disponible dans cet
+  environnement, `is_configured()==False`, aucune requête réseau tant que non configuré.
+- **Interface Hunter** : `/web-intelligence/` (Entreprises/Personnes/Web Intelligence), intégrée au
+  menu existant "Trouver des prospects", bulk (Ajouter aux Prospects / Enrichir / Ajouter à une
+  campagne) qui passe systématiquement par les chemins déjà validés.
+
+Vérification finale (Phase G) : 474 tests (382 hérités de mission 6 + 92 nouveaux mission 7),
+`manage.py check` et `makemigrations --check` propres, migration 0015 (choices uniquement, seule
+migration de cette mission) rejouée sur PostgreSQL 18 réel avec des données réalistes sur les 13
+modèles listés en section 17 de la mission — PKs et comptages strictement identiques avant/après,
+`format_valid` existant intact, nouveaux statuts (`public_source_confirmed`/`domain_mx_valid`)
+utilisables en écriture/lecture réelles. Suite complète (474 tests) rejouée une seconde fois
+directement sur PostgreSQL 18 (et non SQLite) — y compris le test de concurrence de campagne
+(mission 6), qui ne peut s'exécuter que sur Postgres réel : tout est vert.
