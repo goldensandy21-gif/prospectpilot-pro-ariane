@@ -526,8 +526,14 @@ class RealWeeklySlotAssignmentTests(TestCase):
             self._make_new_contact(i)
 
         plan = build_week_plan(now=self.monday)
+        # Round E, point 3 : `plan` contient aussi désormais les étapes
+        # suivantes (J4/J8/J14) pré-préparées pour les J0 de cette semaine —
+        # ce test se concentre sur le SEUL mécanisme d'origine (répartition
+        # des nouveaux J0), donc ne compte que step.order == 1.
         by_date = {}
         for date, cp, step in plan:
+            if step.order != 1:
+                continue
             by_date.setdefault(date, 0)
             by_date[date] += 1
 
@@ -543,6 +549,8 @@ class RealWeeklySlotAssignmentTests(TestCase):
         plan = build_week_plan(now=self.monday)
         by_date = {}
         for date, cp, step in plan:
+            if step.order != 1:
+                continue
             by_date.setdefault(date, 0)
             by_date[date] += 1
 

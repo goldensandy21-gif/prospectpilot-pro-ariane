@@ -306,7 +306,20 @@ def promote_campaign_after_validation(campaign, user):
     campagne ayant au moins un contenu réellement validé dans ce lot — si
     aucun contenu n'a été approuvé, cette fonction n'est simplement jamais
     appelée et la campagne reste non-sendable (is_sendable exige toujours
-    status in (ready, active) ET validated_at renseigné)."""
+    status in (ready, active) ET validated_at renseigné).
+
+    Round E, point 2 — garde-fou défensif : refuse explicitement de
+    promouvoir une campagne paused/cancelled/completed, même si un
+    appelant l'invoquait par erreur (les vues Planning excluent déjà ces
+    statuts en amont — ceci est la seconde ligne de défense). Une
+    campagne en pause ne redevient jamais "ready" par validation
+    implicite ; cancelled/completed ne sont jamais réactivées par ce
+    workflow. La reprise d'une campagne en pause reste une action humaine
+    explicite et distincte — hors périmètre de ce correctif (aucune
+    interface de reprise n'est ajoutée ici) — jamais un effet de bord de
+    « Valider et programmer »."""
+    if campaign.status in ("paused", "cancelled", "completed"):
+        return campaign
     campaign.validated_at = timezone.now()
     campaign.validated_by = user
     if campaign.status != "active":
@@ -539,12 +552,30 @@ def build_week_plan(now=None):
        restante de chaque jour, jusqu'à `new_contacts_per_day` ET jusqu'à
        la capacité totale restante du jour (`daily_total_limit`, qui inclut
        les relances).
+
+    Round E, point 3 — pour chaque NOUVEAU J0 ainsi placé, calcule aussi ses
+    étapes suivantes (J4/J8/J14, délais canoniques depuis la date
+    prévisionnelle de CE J0) et les inclut également si leur date tombe
+    dans la semaine en cours de préparation (jusqu'au vendredi de la
+    semaine de `start` inclus) — pour que l'utilisatrice puisse déjà tester
+    et valider tout ce qui peut partir cette semaine, sans devoir revenir
+    y intervenir. Les étapes plus tardives (ex : J8/J14 d'un J0 de lundi)
+    seront préparées lors de la préparation de leur propre semaine. Ces
+    étapes anticipées n'occupent PAS `daily_total_limit`/`new_contacts_per_day`
+    (ce ne sont que des contenus préparés à l'avance, pas des envois) et ne
+    font JAMAIS avancer `current_step` — le moteur d'exécution réel
+    (campaign_sequencing.py) reste seul juge du moment réel d'envoi, avec
+    ses garde-fous inchangés (J4 n'part jamais si J0 n'a pas réellement
+    réussi, délai réel depuis l'étape précédente, stop conditions).
+
     Renvoie une liste de (date, campaign_prospect, email_step) — n'écrit
     rien elle-même (voir prepare_planned_content, appelé par l'appelant)."""
     now = now or timezone.now()
     settings_row = EmailAutomationSettings.current()
     today = local_today(now, settings_row)
     start = today if today.weekday() < 5 else next_business_day(today)
+    week_monday = start - timedelta(days=start.weekday())
+    week_end = week_monday + timedelta(days=4)  # vendredi de la semaine de `start`
 
     # Section I (Round D) : une campagne en pause/annulée/terminée ne doit
     # jamais se voir préparer de nouveau contenu — brouillon/prête/active
@@ -558,6 +589,7 @@ def build_week_plan(now=None):
     remaining_new = _pending_new_contacts(campaigns)
 
     plan = []
+    future_steps = []
     day_gen = business_day_generator(start)
     day_total = {}
     day_new = {}
@@ -591,8 +623,16 @@ def build_week_plan(now=None):
             day_total[current_day] += 1
             day_new[current_day] += 1
 
+            sequence = cp.campaign.sequence
+            for later_step in sequence.steps.filter(active=True, order__gt=step.order).order_by("order"):
+                later_date = compute_scheduled_date(current_day, sequence, later_step)
+                if later_date > week_end:
+                    break  # delay_days >= 0 : les étapes suivantes ne feront que s'éloigner davantage
+                future_steps.append((later_date, cp, later_step))
+
         day_index += 1
 
+    plan.extend(future_steps)
     return plan
 
 

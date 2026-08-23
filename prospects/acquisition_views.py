@@ -826,7 +826,10 @@ def email_planning_send_tests(request):
     from .services.email_automation import send_test_email
 
     test_recipient = settings.EMAIL_HOST_USER or "contact-predict@predictneed-ia.com"
-    campaigns = Campaign.objects.filter(planning_managed=True)
+    # Round E, point 2 : une campagne paused/cancelled/completed ne doit
+    # jamais recevoir de test via l'action globale « Envoyer les tests »,
+    # exactement comme build_week_plan() ne la prépare plus.
+    campaigns = Campaign.objects.filter(planning_managed=True).exclude(status__in=["paused", "cancelled", "completed"])
     sent = 0
     for planned in PlannedEmailContent.objects.filter(
         campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
@@ -866,7 +869,12 @@ def email_planning_validate_and_schedule(request):
 
     from .services.email_automation import promote_campaign_after_validation, validate_planned_content
 
-    campaigns = Campaign.objects.filter(planning_managed=True)
+    # Round E, point 2 : une campagne paused/cancelled/completed ne doit
+    # jamais être (re)validée/reprogrammée par l'action globale — une
+    # campagne en pause ne redevient jamais "ready" par validation
+    # implicite, et cancelled/completed ne sont jamais réactivées par ce
+    # workflow.
+    campaigns = Campaign.objects.filter(planning_managed=True).exclude(status__in=["paused", "cancelled", "completed"])
     validated_count = 0
     stale_count = 0
     test_required_count = 0

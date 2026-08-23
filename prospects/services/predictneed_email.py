@@ -614,11 +614,18 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
         return record
 
     message_id = make_msgid(domain=(identity["from_email"].split("@", 1)[-1] or "predictneed-ia.com"))
-    headers = {
-        "Message-ID": message_id,
-        "List-Unsubscribe": f"<{build_unsubscribe_url(prospect, request)}>",
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-    }
+    headers = {"Message-ID": message_id}
+    if not is_test:
+        # Round E, point 1 : un e-mail is_test=True ne doit JAMAIS porter le
+        # vrai List-Unsubscribe du prospect — un client mail (Gmail,
+        # Outlook...) propose sinon une désinscription en un clic (RFC 8058)
+        # d'un vrai prospect à partir d'un simple test. Aucun en-tête
+        # List-Unsubscribe/List-Unsubscribe-Post n'est émis du tout pour un
+        # test plutôt que d'y mettre un lien neutralisé : ce sont des
+        # en-têtes réglementaires réels, jamais un simulacre. Comportement
+        # commercial inchangé.
+        headers["List-Unsubscribe"] = f"<{build_unsubscribe_url(prospect, request)}>"
+        headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     # Section D (Round D, verrous production) : le threading (In-Reply-To/
     # References) ne doit JAMAIS référencer un envoi de test — un test J0
     # ne doit jamais faire croire au vrai J0 qu'il répond à quelque chose,
