@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Emails préparés | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="section-header">
+  <div>
+    <span class="eyebrow">CAMPAGNES · PLANNING E-MAIL</span>
+    <h1>Emails préparés — semaine du {{ week_dates.0|date:"d/m" }} au {{ week_dates.4|date:"d/m" }}</h1>
+    <p>
+      Tous les emails préparés pour cette semaine. Ouvre un email pour voir son rendu exact, le modifier si besoin,
+      envoyer un test facultatif, ou le programmer. Programmer n'envoie jamais rien immédiatement — le scheduler
+      enverra aux dates prévues, une fois activé.
+    </p>
+  </div>
+</section>
+<section class="container-fluid px-lg-4 pb-5">
+
+  <div class="cockpit-card">
+    {% if rows %}
+    <form method="post" action="{% url 'email_planning_programmer_selection' %}" id="programmer-form"
+          onsubmit="return confirm('Vous allez programmer ' + document.querySelectorAll(&quot;input[name=planned_ids]:checked&quot;).length + ' email(s). Aucun email ne sera envoyé immédiatement. Ils seront envoyés aux dates prévues.');">
+      {% csrf_token %}
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+        <button type="button" class="btn btn-sm btn-outline-dark" id="select-all-btn">Tout sélectionner</button>
+        <button type="button" class="btn btn-sm btn-outline-dark" id="select-none-btn">Tout désélectionner</button>
+        <button type="submit" class="btn btn-primary-custom">Programmer la sélection</button>
+        <span class="text-muted small">Programmer ≠ Envoyer maintenant — c'est une autorisation pour le scheduler, à la date prévue de chaque email.</span>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table commercial-table align-middle mb-0">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="select-all-checkbox"></th>
+              <th>Date prévue</th>
+              <th>Heure prévue</th>
+              <th>Entreprise</th>
+              <th>Destinataire</th>
+              <th>Étape</th>
+              <th>Sujet</th>
+              <th>Statut</th>
+              <th>Dernière modification</th>
+              <th>Programmé</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              {% with p=row.planned %}
+              <tr>
+                <td>
+                  {% if not row.sent %}
+                    <input type="checkbox" name="planned_ids" value="{{ p.pk }}" class="row-checkbox">
+                  {% endif %}
+                </td>
+                <td>{{ p.scheduled_date|date:"d/m/Y" }}</td>
+                <td class="text-muted small">{{ settings.send_window_start|time:"H:i" }}–{{ settings.send_window_end|time:"H:i" }}</td>
+                <td><strong>{{ p.campaign_prospect.prospect.name }}</strong></td>
+                <td>{{ p.campaign_prospect.prospect.public_email|default:"—" }}</td>
+                <td>{{ p.email_step.name|default:"—" }}</td>
+                <td>{{ p.subject|truncatechars:55 }}</td>
+                <td>
+                  <span class="status-pill
+                    {% if row.display_status == 'Programmé' or row.display_status == 'Envoyé' %}status-success
+                    {% elif row.display_status == 'Annulé / exclu' %}status-danger
+                    {% else %}status-warning{% endif %}">{{ row.display_status }}</span>
+                  {% if row.tested %}<span class="badge bg-light text-dark border ms-1" title="Un test a déjà été envoyé sur ce contenu exact">Testé</span>{% endif %}
+                </td>
+                <td class="text-muted small">{{ p.updated_at|date:"d/m H:i" }}</td>
+                <td>{% if row.programmed %}✔{% else %}—{% endif %}</td>
+                <td>
+                  <a class="btn btn-sm btn-outline-dark" href="{% url 'email_planning_content_detail' p.pk %}">Voir / Modifier</a>
+                </td>
+              </tr>
+              {% endwith %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </form>
+    {% else %}
+      <div class="empty-state">
+        <div class="empty-state-title">Aucun email préparé pour cette semaine.</div>
+        <p>Utilise « Préparer la semaine » depuis <a href="{% url 'email_planning' %}">Planning e-mail</a>.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <a class="btn btn-outline-dark mt-3" href="{% url 'email_planning' %}">← Retour au Planning e-mail</a>
+</section>
+<script>
+(function () {
+  var selectAllCheckbox = document.getElementById('select-all-checkbox');
+  var selectAllBtn = document.getElementById('select-all-btn');
+  var selectNoneBtn = document.getElementById('select-none-btn');
+  function setAll(checked) {
+    document.querySelectorAll('.row-checkbox').forEach(function (cb) { cb.checked = checked; });
+    if (selectAllCheckbox) { selectAllCheckbox.checked = checked; }
+  }
+  if (selectAllCheckbox) { selectAllCheckbox.addEventListener('change', function () { setAll(this.checked); }); }
+  if (selectAllBtn) { selectAllBtn.addEventListener('click', function () { setAll(true); }); }
+  if (selectNoneBtn) { selectNoneBtn.addEventListener('click', function () { setAll(false); }); }
+})();
+</script>
+{% endblock %}

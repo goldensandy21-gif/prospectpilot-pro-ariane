@@ -605,13 +605,17 @@ class DNCAndSuppressionUnaffectedTests(TestCase):
         make_public_email(prospect)
         member = CampaignProspect.objects.create(campaign=campaign, prospect=prospect, status="ready_to_contact")
         step1 = campaign.sequence.steps.get(order=1)
-        freeze_planned_content(member, step1, user=None, scheduled_date=timezone.now().date())
+        planned = freeze_planned_content(member, step1, user=None, scheduled_date=timezone.now().date())
+        # Workflow final (Programmer) : validate_planned_content() vérifie
+        # désormais elle-même l'éligibilité du prospect (is_suppressed, qui
+        # couvre prospecting_allowed=False) — freeze_planned_content() ne
+        # peut donc plus jamais programmer un contenu pour ce prospect ;
+        # `planned` reste "to_validate", jamais "validated".
+        planned.refresh_from_db()
+        self.assertNotEqual(planned.status, "validated")
 
         result = advance_campaign_prospect(member.pk)
-        # prospecting_allowed=False n'est pas un des motifs vérifiés par
-        # _stop_reason() (qui couvre do_not_contact/paying/churned/Suppression/
-        # stop_on_*) — il est re-détecté par is_suppressed() juste avant SMTP
-        # (correctif d'audit round 3), donc "email_suppressed" ici, pas
-        # "stopped". Dans les deux cas : aucun email réellement envoyé.
-        self.assertEqual(result["action"], "email_suppressed")
+        # Sans contenu validé, le scheduler bloque bien avant même
+        # d'atteindre SMTP — aucun email réellement envoyé dans tous les cas.
+        self.assertEqual(result["action"], "blocked_awaiting_validation")
         self.assertEqual(EmailSend.objects.filter(campaign_prospect=member, is_test=False, status="sent").count(), 0)

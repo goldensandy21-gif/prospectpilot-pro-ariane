@@ -73,7 +73,11 @@ class SendableAfterValidationTests(TestCase):
         self.icp = make_icp(self.product)
         self.user = User.objects.create_user(username="testerA", password="x")
 
-    def test_adopted_draft_campaign_becomes_sendable_only_after_prepare_test_validate(self):
+    def test_adopted_draft_campaign_becomes_sendable_only_after_prepare_validate(self):
+        """Depuis le workflow final (section 9) : le test n'est plus une
+        condition de validation — seule une préparation propre + une
+        approbation humaine explicite (Programmer) rendent la campagne
+        envoyable."""
         campaign, sequence, step1 = make_legacy_single_step_campaign(self.product, self.icp)
         prospect = make_prospect()
         make_public_email(prospect)
@@ -88,16 +92,8 @@ class SendableAfterValidationTests(TestCase):
         step1 = campaign.sequence.steps.get(order=1)
         planned = prepare_planned_content(member, step1, timezone.now().date())
         campaign.refresh_from_db()
-        self.assertFalse(campaign.is_sendable, "préparé mais pas encore testé/validé -> toujours pas sendable")
+        self.assertFalse(campaign.is_sendable, "préparé mais pas encore programmé -> toujours pas sendable")
 
-        ok, reason = validate_planned_content(planned, self.user)
-        self.assertFalse(ok)
-        self.assertEqual(reason, "test_required")
-        campaign.refresh_from_db()
-        self.assertFalse(campaign.is_sendable)
-
-        send_test_email(member, planned, "contact-predict@predictneed-ia.com")
-        planned.refresh_from_db()
         ok, reason = validate_planned_content(planned, self.user)
         self.assertTrue(ok, reason)
 

@@ -13,16 +13,18 @@
       <form method="post" action="{% url 'email_planning_prepare_week' %}">{% csrf_token %}
         <button class="btn btn-outline-dark">Préparer la semaine</button>
       </form>
+      <a class="btn btn-outline-dark" href="{% url 'email_planning_prepared' %}">Voir les emails préparés</a>
       <form method="post" action="{% url 'email_planning_send_tests' %}">{% csrf_token %}
-        <button class="btn btn-outline-dark">Envoyer les tests à {{ test_recipient }}</button>
+        <button class="btn btn-outline-dark">Envoyer les tests à {{ test_recipient }} (facultatif)</button>
       </form>
-      <form method="post" action="{% url 'email_planning_validate_and_schedule' %}" onsubmit="return confirm('Valider et programmer la semaine ? Le contenu approuvé sera figé et deviendra envoyable par le scheduler.');">{% csrf_token %}
-        <button class="btn btn-primary-custom">Valider et programmer la semaine</button>
+      <form method="post" action="{% url 'email_planning_validate_and_schedule' %}" onsubmit="return confirm('Programmer tous les emails prêts de la semaine ? Aucun email ne sera envoyé immédiatement. Ils seront envoyés aux dates prévues.');">{% csrf_token %}
+        <button class="btn btn-primary-custom">Programmer tout</button>
       </form>
     </div>
     <p class="text-muted small mt-2 mb-0">
       Réglages : {{ settings.new_contacts_per_day }} nouveau(x) contact(s)/jour, {{ settings.daily_total_limit }} envoi(s) total/jour (relances comprises).
-      Sans validation explicite : aucun envoi commercial automatique.
+      « Voir les emails préparés » permet de relire, modifier et programmer chaque email individuellement.
+      Sans programmation explicite : aucun envoi commercial automatique.
     </p>
   </div>
 

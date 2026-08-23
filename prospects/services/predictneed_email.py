@@ -377,9 +377,13 @@ def _body_blocks_html(ctx, step_order):
     return _BODY_BUILDERS_HTML.get(step_order, _body_blocks_j0_html)(ctx)
 
 
-def render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=None, step_order=1):
-    greeting = f"Bonjour {escape(ctx['first_name'])}," if ctx["first_name"] else "Bonjour,"
-    body_html = _body_blocks_html(ctx, step_order)
+def _assemble_envelope_html(greeting, body_html, product, compliance_profile, prospect, email, ctx, open_tracking_url=None):
+    """Enveloppe PredictNeed commune (bannière, salutation, signature,
+    footer conformité, pixel) — partagée par le rendu automatique par étape
+    (render_predictneed_html) ET par le rendu d'un contenu modifié
+    manuellement (render_custom_planned_content) : la mise en page, jamais
+    manipulable directement par l'utilisatrice, reste garantie identique
+    dans les deux cas. `body_html` est le SEUL bloc qui varie."""
     signature_html = "<br>".join(escape(line) for line in _signature_lines(product))
 
     # Section H (automatisation email) — pixel d'ouverture indicatif, jamais
@@ -415,6 +419,12 @@ def render_predictneed_html(ctx, product, compliance_profile, prospect, email, o
         f"{render_compliance_footer_html(prospect, product, compliance_profile, ctx['unsubscribe_url'], ctx['privacy_url'], email)}"
         f"</table></td></tr></table>{pixel_html}</body></html>"
     )
+
+
+def render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=None, step_order=1):
+    greeting = f"Bonjour {escape(ctx['first_name'])}," if ctx["first_name"] else "Bonjour,"
+    body_html = _body_blocks_html(ctx, step_order)
+    return _assemble_envelope_html(greeting, body_html, product, compliance_profile, prospect, email, ctx, open_tracking_url=open_tracking_url)
 
 
 def _body_lines_j0(ctx):
@@ -477,17 +487,24 @@ def _body_lines(ctx, step_order):
     return _BODY_BUILDERS_TEXT.get(step_order, _body_lines_j0)(ctx)
 
 
+def _assemble_envelope_text(greeting, body_lines, product, compliance_profile, prospect, email, ctx):
+    """Pendant texte brut de _assemble_envelope_html — même principe :
+    partagé par le rendu automatique et par le rendu d'un contenu modifié
+    manuellement."""
+    lines = [greeting, ""]
+    lines.extend(body_lines)
+    lines.append("")
+    lines.append("Bien cordialement,")
+    lines.extend(_signature_lines(product))
+    lines.append("")
+    lines.append("---")
+    lines.append(render_compliance_footer_text(prospect, product, compliance_profile, ctx["unsubscribe_url"], ctx["privacy_url"], email))
+    return "\n".join(lines)
+
+
 def render_predictneed_text(ctx, product, compliance_profile, prospect, email, step_order=1):
     greeting = f"Bonjour {ctx['first_name']}," if ctx["first_name"] else "Bonjour,"
-    body_lines = [greeting, ""]
-    body_lines.extend(_body_lines(ctx, step_order))
-    body_lines.append("")
-    body_lines.append("Bien cordialement,")
-    body_lines.extend(_signature_lines(product))
-    body_lines.append("")
-    body_lines.append("---")
-    body_lines.append(render_compliance_footer_text(prospect, product, compliance_profile, ctx["unsubscribe_url"], ctx["privacy_url"], email))
-    return "\n".join(body_lines)
+    return _assemble_envelope_text(greeting, _body_lines(ctx, step_order), product, compliance_profile, prospect, email, ctx)
 
 
 def inject_open_pixel(html_body, open_tracking_token, request=None):
@@ -551,6 +568,55 @@ def render_predictneed_email(campaign_prospect, email_step=None, email_variant=N
     html = render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=open_tracking_url, step_order=step_order)
     text = render_predictneed_text(ctx, product, compliance_profile, prospect, email, step_order=step_order)
     return subject, html, text
+
+
+def render_custom_planned_content(campaign_prospect, email_step, body_text, request=None):
+    """Workflow final (section 3, « Modifier ») — rend un corps rédactionnel
+    fourni par l'utilisatrice (texte brut, jamais du HTML), en conservant
+    automatiquement l'enveloppe PredictNeed complète : bannière, salutation,
+    CTA (bouton, cohérent avec les autres étapes), footer conformité,
+    signature — et les liens techniques RÉELS (tracking, unsubscribe),
+    puisque ce contenu figé est destiné à un envoi commercial comme tout
+    autre PlannedEmailContent (jamais de pixel, injecté séparément au
+    moment du vrai envoi, comme pour le rendu automatique).
+
+    `body_text` est scindé en paragraphes sur les lignes vides ; chacun est
+    échappé et enveloppé dans un `<p>` au même style que les blocs générés
+    automatiquement — aucune balise HTML n'est jamais interprétée depuis la
+    saisie de l'utilisatrice. Ne touche jamais l'EmailVariant ni le
+    template global : ce rendu ne modifie que la valeur retournée ici,
+    destinée à UNE ligne PlannedEmailContent précise."""
+    prospect = campaign_prospect.prospect
+    product = campaign_prospect.campaign.product
+    compliance_profile = getattr(product, "compliance_profile", None)
+    email = prospect.public_email or ""
+    variant = email_step.variants.filter(active=True).first() if email_step else None
+
+    ctx = build_predictneed_context(campaign_prospect, email_step=email_step, email_variant=variant, request=request, is_test=False)
+    greeting_html = f"Bonjour {escape(ctx['first_name'])}," if ctx["first_name"] else "Bonjour,"
+    greeting_text = f"Bonjour {ctx['first_name']}," if ctx["first_name"] else "Bonjour,"
+
+    paragraphs = [p.strip() for p in body_text.split("\n\n") if p.strip()]
+    if not paragraphs and body_text.strip():
+        paragraphs = [body_text.strip()]
+
+    paragraphs_html = "".join(
+        f'<p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:{INK};">{escape(p)}</p>'
+        for p in paragraphs
+    )
+    body_html = paragraphs_html + _cta_button_html(ctx) + _reply_line_html()
+    html = _assemble_envelope_html(greeting_html, body_html, product, compliance_profile, prospect, email, ctx, open_tracking_url=None)
+
+    body_lines = []
+    for p in paragraphs:
+        body_lines.append(p)
+        body_lines.append("")
+    if ctx["cta_target_url"]:
+        body_lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+    body_lines.append("Vous pouvez aussi simplement répondre à cet e-mail si vous avez une question.")
+    text = _assemble_envelope_text(greeting_text, body_lines, product, compliance_profile, prospect, email, ctx)
+
+    return html, text
 
 
 def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_variant=None, request=None, is_test=False, test_recipient="", frozen_content=None, now=None):

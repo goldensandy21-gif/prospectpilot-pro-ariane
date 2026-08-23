@@ -870,9 +870,17 @@ class PlannedEmailContent(models.Model):
 
     tested_content_hash = models.CharField(
         max_length=64, blank=True,
-        help_text="content_hash au moment du dernier test EmailSend réussi. La validation exige tested_content_hash == content_hash.",
+        help_text="content_hash au moment du dernier test EmailSend réussi — purement informatif "
+                   "(badge « Testé ») depuis le workflow final : ne conditionne plus la validation.",
     )
     test_sent_at = models.DateTimeField(null=True, blank=True, help_text="Horodatage du dernier test EmailSend réussi pour ce contenu.")
+
+    manually_edited_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Renseigné dès qu'une modification manuelle (sujet/texte) a été enregistrée sur "
+                   "cette ligne précise — le contenu n'est alors plus jamais signalé automatiquement "
+                   "comme périmé (voir is_content_stale) : la version humaine fait foi.",
+    )
 
     scheduled_date = models.DateField(help_text="Jour ouvré prévu (déjà ajusté week-end).")
 
@@ -880,9 +888,10 @@ class PlannedEmailContent(models.Model):
     approved_at = models.DateTimeField(null=True, blank=True)
 
     STATUS = [
-        ("to_validate", "À valider"),
-        ("validated", "Validé"),
-        ("stale", "Contenu modifié depuis validation"),
+        ("to_validate", "À relire"),
+        ("modified", "Modifié — à reprogrammer"),
+        ("validated", "Programmé"),
+        ("stale", "Modifié — à reprogrammer"),
     ]
     status = models.CharField(max_length=20, choices=STATUS, default="to_validate")
 

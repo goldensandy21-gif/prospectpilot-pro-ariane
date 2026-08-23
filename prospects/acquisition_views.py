@@ -736,6 +736,175 @@ def email_planning(request):
     })
 
 
+PLANNED_STATUS_DISPLAY = {
+    "to_validate": "À relire",
+    "modified": "Modifié — à reprogrammer",
+    "stale": "Modifié — à reprogrammer",
+    "validated": "Programmé",
+}
+
+
+def _prepared_content_display_status(planned, was_sent):
+    """Workflow final, section 10 — statuts lisibles côté interface.
+    « Envoyé »/« Annulé / exclu » priment toujours sur le statut brut de
+    PlannedEmailContent : un contenu réellement envoyé ou un prospect arrêté
+    ne doit jamais être présenté comme « À relire »/« Programmé »."""
+    if was_sent:
+        return "Envoyé"
+    cp = planned.campaign_prospect
+    if cp.status in ("do_not_contact", "excluded", "lost", "churned"):
+        return "Annulé / exclu"
+    return PLANNED_STATUS_DISPLAY.get(planned.status, planned.status)
+
+
+@login_required
+def email_planning_prepared(request):
+    """Section 1 (workflow final) — « Emails préparés » : TOUS les
+    PlannedEmailContent de la semaine en cours, une ligne par contenu
+    (contrairement à email_planning() qui affiche une ligne par prospect,
+    limitée à sa seule PROCHAINE étape). C'est ici que l'utilisatrice
+    relit, modifie et programme chaque email — individuellement ou en lot
+    (voir email_planning_content_detail / email_planning_programmer_selection)."""
+    settings_row = EmailAutomationSettings.current()
+    tz = ZoneInfo(settings_row.timezone_name)
+    today = timezone.now().astimezone(tz).date()
+    week_dates = _week_dates(today, 0)
+
+    campaigns = Campaign.objects.filter(planning_managed=True)
+    planned_list = list(
+        PlannedEmailContent.objects.filter(
+            campaign_prospect__campaign__in=campaigns,
+            scheduled_date__gte=week_dates[0], scheduled_date__lte=week_dates[-1],
+        )
+        .select_related("campaign_prospect__prospect", "campaign_prospect__campaign", "email_step")
+        .order_by("scheduled_date", "email_step__order", "-campaign_prospect__acquisition_score_snapshot")
+    )
+    for planned in planned_list:
+        mark_stale_if_changed(planned)  # jamais silencieux : re-vérifié à chaque affichage
+
+    sent_pairs = set(
+        EmailSend.objects.filter(
+            campaign_prospect__campaign__in=campaigns, is_test=False, status="sent",
+        ).values_list("campaign_prospect_id", "email_step_id")
+    )
+
+    rows = []
+    for planned in planned_list:
+        was_sent = (planned.campaign_prospect_id, planned.email_step_id) in sent_pairs
+        rows.append({
+            "planned": planned,
+            "display_status": _prepared_content_display_status(planned, was_sent),
+            "tested": bool(planned.tested_content_hash and planned.tested_content_hash == planned.content_hash),
+            "programmed": planned.status == "validated",
+            "sent": was_sent,
+        })
+
+    return render(request, "prospects/email_planning_prepared.html", {
+        "rows": rows, "week_dates": week_dates, "settings": settings_row,
+        "test_recipient": settings.EMAIL_HOST_USER or "contact-predict@predictneed-ia.com",
+    })
+
+
+@login_required
+def email_planning_content_detail(request, planned_id):
+    """Section 2/3/5/6 (workflow final) — ouvre UN PlannedEmailContent
+    précis : le rendu affiché est TOUJOURS le contenu FIGÉ exact (jamais un
+    nouveau rendu généré à la volée). Permet de le modifier (sujet + texte
+    rédactionnel uniquement — jamais du HTML brut, voir
+    email_automation.apply_manual_edit), d'envoyer un test facultatif, ou
+    de le programmer individuellement."""
+    planned = get_object_or_404(
+        PlannedEmailContent.objects.select_related(
+            "campaign_prospect__prospect", "campaign_prospect__campaign", "email_step",
+        ),
+        pk=planned_id, campaign_prospect__campaign__planning_managed=True,
+    )
+    mark_stale_if_changed(planned)
+    planned.refresh_from_db()
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+        from .services.email_automation import apply_manual_edit, promote_campaign_after_validation, send_test_email, validate_planned_content
+
+        if action == "edit":
+            subject = request.POST.get("subject", "")
+            body_text = request.POST.get("body_text", "")
+            if not subject.strip() or not body_text.strip():
+                messages.error(request, "Le sujet et le texte ne peuvent pas être vides.")
+            else:
+                apply_manual_edit(planned, subject, body_text, request=request)
+                messages.success(request, "Modification enregistrée pour ce prospect et cette étape uniquement. Toute programmation existante a été invalidée.")
+        elif action == "test":
+            test_recipient = settings.EMAIL_HOST_USER or "contact-predict@predictneed-ia.com"
+            record = send_test_email(planned.campaign_prospect, planned, test_recipient, request=request)
+            if record.status == "sent":
+                messages.success(request, f"Test envoyé à {test_recipient} — aucun email envoyé au prospect.")
+            else:
+                messages.error(request, f"Échec de l'envoi de test : {record.error}")
+        elif action == "programmer":
+            ok, reason = validate_planned_content(planned, request.user)
+            if ok:
+                promote_campaign_after_validation(planned.campaign_prospect.campaign, request.user)
+                messages.success(request, "Programmé. Aucun email envoyé immédiatement — le scheduler l'enverra à la date prévue.")
+            else:
+                REASON_LABELS = {
+                    "stale": "contenu devenu obsolète depuis la préparation — relance « Préparer » ou modifie le texte.",
+                    "no_email": "ce prospect n'a plus d'adresse exploitable.",
+                    "prospect_not_eligible": "ce prospect n'est plus éligible (exclu, en opposition, ou séquence arrêtée).",
+                }
+                messages.error(request, f"Programmation refusée : {REASON_LABELS.get(reason, reason)}")
+        return redirect("email_planning_content_detail", planned_id=planned.pk)
+
+    return render(request, "prospects/email_planning_content_detail.html", {
+        "planned": planned,
+        "tested": bool(planned.tested_content_hash and planned.tested_content_hash == planned.content_hash),
+        "display_status": PLANNED_STATUS_DISPLAY.get(planned.status, planned.status),
+        "test_recipient": settings.EMAIL_HOST_USER or "contact-predict@predictneed-ia.com",
+    })
+
+
+@login_required
+def email_planning_programmer_selection(request):
+    """Section 7/8 (workflow final) — programme UNIQUEMENT les
+    PlannedEmailContent explicitement cochés sur la page « Emails préparés »
+    (jamais « tout » implicitement). N'APPELLE JAMAIS SMTP : autorise
+    seulement le scheduler à envoyer plus tard, aux dates prévues — voir le
+    test dédié `test_programmer_selection_never_sends_immediately`."""
+    if request.method != "POST":
+        return redirect("email_planning_prepared")
+
+    from .services.email_automation import promote_campaign_after_validation, validate_planned_content
+
+    planned_ids = request.POST.getlist("planned_ids")
+    if not planned_ids:
+        messages.error(request, "Aucun email sélectionné.")
+        return redirect("email_planning_prepared")
+
+    validated_count = 0
+    refused_count = 0
+    validated_campaign_ids = set()
+    candidates = (
+        PlannedEmailContent.objects.filter(pk__in=planned_ids, campaign_prospect__campaign__planning_managed=True)
+        .exclude(campaign_prospect__campaign__status__in=["paused", "cancelled", "completed"])
+        .select_related("campaign_prospect__campaign")
+    )
+    for planned in candidates:
+        ok, reason = validate_planned_content(planned, request.user)
+        if ok:
+            validated_count += 1
+            validated_campaign_ids.add(planned.campaign_prospect.campaign_id)
+        else:
+            refused_count += 1
+
+    for campaign in Campaign.objects.filter(pk__in=validated_campaign_ids):
+        promote_campaign_after_validation(campaign, request.user)
+
+    messages.success(request, f"{validated_count} email(s) programmé(s). Aucun email envoyé immédiatement — ils partiront aux dates prévues.")
+    if refused_count:
+        messages.warning(request, f"{refused_count} email(s) écarté(s) (contenu périmé ou prospect non éligible).")
+    return redirect("email_planning_prepared")
+
+
 @login_required
 def email_planning_preview(request, cp_id):
     """Section G (Round D, verrous production) — l'aperçu affiche le
@@ -810,16 +979,17 @@ def email_planning_prepare_week(request):
 
 @login_required
 def email_planning_send_tests(request):
-    """Envoie chaque contenu « à valider »/« modifié » en mode test UNIQUEMENT
+    """Envoie chaque contenu non encore programmé en mode test UNIQUEMENT
     vers l'adresse de test contrôlée — EXACTEMENT le contenu déjà préparé
     (correctif audit, section 3 : jamais un nouveau rendu ; JAMAIS de pixel
     d'ouverture, section 5). Ne compte jamais comme premier contact
     commercial, ne crée aucun engagement commercial.
 
-    Section 4 (audit correctif final) : un test réussi ICI est ce qui
-    autorise ensuite « Valider et programmer » — send_test_email() marque
-    `tested_content_hash`/`test_sent_at` sur `planned` uniquement si l'envoi
-    a réellement abouti."""
+    Workflow final (section 5/9) : le test est désormais FACULTATIF — il ne
+    conditionne plus « Programmer », c'est un contrôle supplémentaire pour
+    qui souhaite voir le rendu dans sa vraie boîte mail. send_test_email()
+    marque tout de même `tested_content_hash`/`test_sent_at` (purement
+    informatif, badge « Testé »)."""
     if request.method != "POST":
         return redirect("email_planning")
 
@@ -832,29 +1002,28 @@ def email_planning_send_tests(request):
     campaigns = Campaign.objects.filter(planning_managed=True).exclude(status__in=["paused", "cancelled", "completed"])
     sent = 0
     for planned in PlannedEmailContent.objects.filter(
-        campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
+        campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale", "modified"],
     ).select_related("campaign_prospect", "email_step"):
         record = send_test_email(planned.campaign_prospect, planned, test_recipient, request=request)
         if record.status == "sent":
             sent += 1
 
-    messages.success(request, f"{sent} e-mail(s) de test envoyé(s) à {test_recipient} — contenu identique à celui qui serait validé. Aucun envoi commercial.")
+    messages.success(request, f"{sent} e-mail(s) de test envoyé(s) à {test_recipient} — contenu identique au contenu préparé. Aucun envoi commercial.")
     return redirect("email_planning")
 
 
 @login_required
 def email_planning_validate_and_schedule(request):
-    """« Valider et programmer la semaine » — trace d'approbation explicite
-    (qui/quand/quel contenu) sur EXACTEMENT le contenu déjà préparé/testé,
-    jamais un nouveau rendu (correctif audit, section 3). Si les données
-    source du prospect ont changé depuis « Préparer », le contenu passe
-    `stale` et n'est pas validé — il faut relancer « Préparer ».
+    """« Programmer tout » — trace d'approbation explicite (qui/quand/quel
+    contenu) sur EXACTEMENT le contenu déjà préparé, jamais un nouveau
+    rendu (correctif audit, section 3). Si les données source du prospect
+    ont changé depuis « Préparer », le contenu passe `stale` et n'est pas
+    programmé — il faut relancer « Préparer » ou le modifier à la main.
 
-    Section 4 (audit correctif final) : un POST direct sur cette vue, sans
-    qu'un test réussi ait eu lieu sur EXACTEMENT ce contenu, est TOUJOURS
-    refusé ici — validate_planned_content() vérifie
-    tested_content_hash == content_hash côté serveur, jamais seulement côté
-    interface.
+    Workflow final (section 6/9) : le test n'est plus une condition —
+    `validate_planned_content()` n'exige plus `tested_content_hash ==
+    content_hash`. Cette action N'ENVOIE JAMAIS RIEN elle-même : elle
+    autorise seulement le scheduler à envoyer plus tard, aux dates prévues.
 
     Section A (Round D, verrous production) : au-delà du seul
     PlannedEmailContent, cette action doit rendre la CAMPAGNE réellement
@@ -876,31 +1045,26 @@ def email_planning_validate_and_schedule(request):
     # workflow.
     campaigns = Campaign.objects.filter(planning_managed=True).exclude(status__in=["paused", "cancelled", "completed"])
     validated_count = 0
-    stale_count = 0
-    test_required_count = 0
+    refused_count = 0
     validated_campaign_ids = set()
     for planned in PlannedEmailContent.objects.filter(
-        campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
+        campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale", "modified"],
     ).select_related("campaign_prospect__campaign", "email_step"):
         ok, reason = validate_planned_content(planned, request.user)
         if ok:
             validated_count += 1
             validated_campaign_ids.add(planned.campaign_prospect.campaign_id)
-        elif reason == "test_required":
-            test_required_count += 1
         else:
-            stale_count += 1
+            refused_count += 1
 
     for campaign in Campaign.objects.filter(pk__in=validated_campaign_ids):
         promote_campaign_after_validation(campaign, request.user)
 
-    messages.success(request, f"{validated_count} étape(s) validée(s) et programmée(s) par {request.user.username}.")
+    messages.success(request, f"{validated_count} étape(s) programmée(s) par {request.user.username}. Aucun email envoyé immédiatement — le scheduler enverra aux dates prévues.")
     if validated_campaign_ids:
         messages.success(request, f"{len(validated_campaign_ids)} campagne(s) désormais envoyable(s) par le scheduler.")
-    if stale_count:
-        messages.warning(request, f"{stale_count} étape(s) écartée(s) : contenu devenu obsolète depuis la préparation — relance « Préparer » pour ces prospects.")
-    if test_required_count:
-        messages.warning(request, f"{test_required_count} étape(s) écartée(s) : envoie d'abord un test réussi sur ce contenu (« Envoyer les tests ») avant de valider.")
+    if refused_count:
+        messages.warning(request, f"{refused_count} étape(s) écartée(s) (contenu périmé ou prospect non éligible) — relance « Préparer » ou vérifie le prospect.")
     return redirect("email_planning")
 
 

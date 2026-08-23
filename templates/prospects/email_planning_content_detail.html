@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}{{ planned.campaign_prospect.prospect.name }} — {{ planned.email_step.name }} | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="section-header">
+  <div>
+    <span class="eyebrow">CAMPAGNES · PLANNING E-MAIL</span>
+    <h1>{{ planned.campaign_prospect.prospect.name }} — {{ planned.email_step.name }}</h1>
+    <p>Prévu le {{ planned.scheduled_date|date:"d/m/Y" }} · Destinataire : {{ planned.campaign_prospect.prospect.public_email|default:"—" }}</p>
+  </div>
+</section>
+<section class="container-fluid px-lg-4 pb-5">
+
+  <div class="cockpit-card mb-3">
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <span class="status-pill
+        {% if display_status == 'Programmé' %}status-success
+        {% elif display_status == 'Annulé / exclu' %}status-danger
+        {% else %}status-warning{% endif %}">{{ display_status }}</span>
+      {% if tested %}<span class="badge bg-light text-dark border">Testé le {{ planned.test_sent_at|date:"d/m/Y H:i" }} (facultatif, information seulement)</span>{% endif %}
+      {% if planned.manually_edited_at %}<span class="badge bg-light text-dark border">Modifié manuellement le {{ planned.manually_edited_at|date:"d/m/Y H:i" }}</span>{% endif %}
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center mt-3">
+      <form method="post" action="{% url 'email_planning_content_detail' planned.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="test">
+        <button class="btn btn-outline-dark" type="submit">Envoyer un test (facultatif, vers {{ test_recipient }})</button>
+      </form>
+      <form method="post" action="{% url 'email_planning_content_detail' planned.pk %}"
+            onsubmit="return confirm('Programmer cet email pour {{ planned.campaign_prospect.prospect.name }} ? Aucun email ne sera envoyé immédiatement — il partira à la date prévue ({{ planned.scheduled_date|date:\"d/m/Y\" }}).');">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="programmer">
+        <button class="btn btn-primary-custom" type="submit">Programmer</button>
+      </form>
+    </div>
+    <p class="text-muted small mt-2 mb-0">Le test est facultatif — il n'est plus nécessaire pour pouvoir Programmer. Programmer n'envoie rien immédiatement.</p>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="cockpit-card">
+        <h2 class="h6">Rendu exact (contenu figé)</h2>
+        <p class="text-muted small mb-1"><strong>Sujet :</strong> {{ planned.subject }}</p>
+        <ul class="nav nav-tabs" id="previewTabs" role="tablist">
+          <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#preview-html" type="button">HTML</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#preview-text" type="button">Texte</button></li>
+        </ul>
+        <div class="tab-content border border-top-0 p-3">
+          <div class="tab-pane fade show active" id="preview-html">
+            <iframe title="Aperçu HTML" style="width:100%;min-height:600px;border:1px solid #e2e6ed;border-radius:8px;" srcdoc="{{ planned.html_body|escape }}"></iframe>
+          </div>
+          <div class="tab-pane fade" id="preview-text">
+            <pre style="white-space:pre-wrap;">{{ planned.text_body }}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="cockpit-card">
+        <h2 class="h6">Modifier</h2>
+        <p class="text-muted small">
+          Corrige uniquement le sujet et le texte rédactionnel visible — jamais de HTML brut. La mise en page
+          PredictNeed, le CTA, les liens de suivi, le footer de conformité, le lien de désabonnement et la signature
+          restent automatiquement conservés et ajoutés autour de ton texte.
+        </p>
+        <form method="post" action="{% url 'email_planning_content_detail' planned.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="edit">
+          <div class="mb-3">
+            <label class="form-label" for="subject-input">Sujet</label>
+            <input type="text" class="form-control" id="subject-input" name="subject" value="{{ planned.subject }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="body-text-input">Texte rédactionnel</label>
+            <textarea class="form-control" id="body-text-input" name="body_text" rows="10"
+              placeholder="Écris ton propre texte ici (un paragraphe par ligne vide). Le CTA, la signature et le footer de conformité seront ajoutés automatiquement — ne les recopie pas ici."></textarea>
+          </div>
+          <button class="btn btn-outline-dark" type="submit">Enregistrer la modification</button>
+        </form>
+        <p class="text-muted small mt-2 mb-0">
+          Une modification ne concerne que ce prospect et cette étape précise — jamais le template, la variante
+          d'email, l'AgentBrief, ni les autres emails préparés. Elle invalide automatiquement toute programmation
+          existante pour ce contenu.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <a class="btn btn-outline-dark mt-3" href="{% url 'email_planning_prepared' %}">← Retour aux emails préparés</a>
+</section>
+{% endblock %}

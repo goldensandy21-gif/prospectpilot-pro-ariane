@@ -45,7 +45,8 @@ from ..models import (
 )
 from .campaign_sequencing import _next_step as _sequence_next_step
 from .campaign_sequencing import advance_campaign_prospect
-from .predictneed_email import render_predictneed_email, send_predictneed_campaign_email
+from .predictneed_email import render_custom_planned_content, render_predictneed_email, send_predictneed_campaign_email
+from .suppression import is_suppressed
 
 
 # ---------------------------------------------------------------------------
@@ -166,10 +167,11 @@ def render_live_content(campaign_prospect, email_step):
 
 def prepare_planned_content(campaign_prospect, email_step, scheduled_date):
     """« Préparer » — génère LA version candidate (un seul rendu, sans
-    pixel), statut « à valider ». Toute nouvelle préparation invalide le
-    test précédent (section 4) : `tested_content_hash`/`test_sent_at` sont
-    réinitialisés, la validation exigera un nouveau test réussi sur CE
-    contenu précis avant de pouvoir programmer l'envoi."""
+    pixel), statut « à relire ». Toute nouvelle préparation efface une
+    éventuelle prise en main manuelle antérieure (`manually_edited_at`) :
+    ce rendu auto-généré redevient la version de référence. `tested_
+    content_hash`/`test_sent_at` sont réinitialisés (le test, désormais
+    facultatif, ne représente plus le contenu courant)."""
     subject, html, text = render_live_content(campaign_prospect, email_step)
     content_hash = content_hash_for(subject, html, text)
 
@@ -181,6 +183,7 @@ def prepare_planned_content(campaign_prospect, email_step, scheduled_date):
             "scheduled_date": scheduled_date,
             "approved_by": None, "approved_at": None,
             "tested_content_hash": "", "test_sent_at": None,
+            "manually_edited_at": None,
             "status": "to_validate",
         },
     )
@@ -193,11 +196,20 @@ def is_content_stale(planned):
     depuis la préparation, le contenu est jugé obsolète — jamais renvoyé
     silencieusement.
 
+    Workflow final (section 4/9) : une fois qu'une modification manuelle a
+    été enregistrée (`manually_edited_at` renseigné), ce contrôle n'a plus
+    lieu d'être — la version humaine fait foi, elle ne doit jamais être
+    signalée « périmée » simplement parce qu'un nouveau rendu automatique
+    donnerait un texte différent (c'est précisément le but de l'édition
+    manuelle de s'en écarter).
+
     Recharge explicitement `campaign_prospect`/`prospect` depuis la base à
     chaque appel plutôt que d'utiliser `planned.campaign_prospect` tel quel :
     un objet Django met en cache la relation dès son premier accès, ce qui
     masquerait silencieusement une modification survenue entre-temps (tout
     l'intérêt de cette fonction est justement de la détecter)."""
+    if planned.manually_edited_at:
+        return False
     campaign_prospect = CampaignProspect.objects.select_related("prospect", "campaign").get(
         pk=planned.campaign_prospect_id,
     )
@@ -235,26 +247,51 @@ def send_test_email(campaign_prospect, planned, test_recipient, request=None, no
 
 
 def validate_planned_content(planned, user):
-    """« Valider et programmer » — NE régénère jamais le texte. Renvoie
+    """« Programmer » — l'action humaine explicite d'approbation (workflow
+    final, section 6/9). NE régénère jamais le texte. Renvoie
     (autorisé: bool, motif: str) — motif vide si autorisé.
 
-    Deux garde-fous, dans cet ordre :
+    Le test email est désormais FACULTATIF (section 5/9) : il ne conditionne
+    plus cette fonction — `approved_by`/`approved_at`/`status="validated"`
+    sont eux-mêmes la preuve de l'approbation humaine du `content_hash`
+    COURANT, que ce contenu ait été testé ou non. `tested_content_hash`
+    reste purement informatif (badge « Testé » dans l'interface) et n'est
+    jamais falsifié ici.
+
+    Garde-fous, dans cet ordre :
     1) le rendu live doit toujours correspondre au hash figé lors de la
-       préparation ; si les données source ont changé entre-temps -> `stale`
-       (il faut relancer « Préparer ») ;
-    2) (section 4, audit correctif final) un envoi de test RÉUSSI doit avoir
-       eu lieu sur EXACTEMENT ce contenu (`tested_content_hash ==
-       content_hash`) ; toute préparation ou modification postérieure au
-       test invalide automatiquement ce dernier (prepare_planned_content
-       réinitialise tested_content_hash) -> `test_required` sinon. Un POST
-       direct vers la validation sans test réussi préalable est donc
-       toujours refusé, ici, côté serveur."""
+       préparation (sauf prise en main manuelle, voir is_content_stale) ;
+       si les données source ont changé entre-temps -> `stale` (il faut
+       relancer « Préparer », ou modifier le contenu à la main) ;
+    2) le prospect doit toujours avoir une adresse exploitable -> `no_email`
+       sinon ;
+    3) le CampaignProspect ne doit pas être dans un état d'arrêt
+       (do_not_contact/excluded/lost/churned) -> `prospect_not_eligible` ;
+    4) le prospect ne doit être ni exclu (predictneed_excluded) ni en
+       opposition/suppression (is_suppressed, qui couvre déjà
+       prospecting_allowed=False et Prospect.status="do_not_contact") ->
+       `prospect_not_eligible`.
+
+    Une fois validée, une modification ultérieure de CE contenu (édition
+    manuelle ou nouvelle préparation) efface systématiquement
+    approved_by/approved_at et repasse le statut à « modifié »/« à relire »
+    (voir apply_manual_edit/prepare_planned_content) — jamais d'envoi sur
+    la base d'une ancienne approbation portant sur un contenu différent."""
     if is_content_stale(planned):
         planned.status = "stale"
         planned.save(update_fields=["status", "updated_at"])
         return False, "stale"
-    if not planned.tested_content_hash or planned.tested_content_hash != planned.content_hash:
-        return False, "test_required"
+
+    campaign_prospect = planned.campaign_prospect
+    prospect = campaign_prospect.prospect
+    email = prospect.public_email or ""
+    if not email:
+        return False, "no_email"
+    if campaign_prospect.status in ("do_not_contact", "excluded", "lost", "churned"):
+        return False, "prospect_not_eligible"
+    if prospect.predictneed_excluded or is_suppressed(email, prospect=prospect):
+        return False, "prospect_not_eligible"
+
     planned.status = "validated"
     planned.approved_by = user
     planned.approved_at = timezone.now()
@@ -262,22 +299,62 @@ def validate_planned_content(planned, user):
     return True, ""
 
 
+def apply_manual_edit(planned, subject, body_text, request=None):
+    """« Modifier » (section 3/4, workflow final) — remplace le sujet et le
+    texte rédactionnel visible d'UNE ligne PlannedEmailContent précise
+    (jamais du HTML brut manipulé par l'utilisatrice). Reconstruit le
+    HTML/texte en conservant automatiquement l'enveloppe PredictNeed
+    (bannière, CTA, footer conformité, signature) et les liens techniques
+    réels (tracking, unsubscribe) — voir
+    predictneed_email.render_custom_planned_content(). Ne touche JAMAIS :
+    le template global, l'EmailVariant, l'AgentBrief, ni aucun autre
+    PlannedEmailContent — seulement cette ligne.
+
+    Invalide systématiquement toute programmation existante : si le contenu
+    était déjà `validated`, il repasse à `modified` (« Modifié — à
+    reprogrammer ») ; sinon il reste/redevient `to_validate` (« À relire »).
+    `approved_by`/`approved_at` sont toujours effacés. `tested_content_hash`
+    n'est JAMAIS falsifié — un ancien test, s'il existait, reste dans
+    l'historique mais ne représente plus la version courante (son hash ne
+    correspondra simplement plus à `content_hash`)."""
+    subject_clean = (subject or "").strip()
+    body_clean = (body_text or "").strip()
+    campaign_prospect = planned.campaign_prospect
+    html, text = render_custom_planned_content(campaign_prospect, planned.email_step, body_clean, request=request)
+
+    was_validated = planned.status == "validated"
+    planned.subject = subject_clean
+    planned.html_body = html
+    planned.text_body = text
+    planned.content_hash = content_hash_for(subject_clean, html, text)
+    planned.manually_edited_at = timezone.now()
+    planned.approved_by = None
+    planned.approved_at = None
+    planned.status = "modified" if was_validated else "to_validate"
+    planned.save(update_fields=[
+        "subject", "html_body", "text_body", "content_hash", "manually_edited_at",
+        "approved_by", "approved_at", "status", "updated_at",
+    ])
+    return planned
+
+
 def freeze_planned_content(campaign_prospect, email_step, user, scheduled_date, test_recipient=""):
     """RÉSERVÉ AUX TESTS AUTOMATISÉS (section J, Round D — audité : à ce jour
     aucun appelant en dehors de prospects/tests/*.py, `grep -rn
     freeze_planned_content prospects/` en fait foi). Combinateur de
-    convenance qui prépare, envoie le test réel désormais obligatoire
-    (section 4), PUIS valide — en un seul appel synchrone, SANS action
-    humaine séparée entre les 3 étapes.
+    convenance qui prépare, envoie un test réel (désormais facultatif côté
+    validation, section 5/9 du workflow final — mais l'envoyer ici reste
+    inoffensif et pratique pour les tests automatisés), PUIS programme — en
+    un seul appel synchrone, SANS action humaine séparée entre les étapes.
 
     AUCUN CHEMIN PRODUCTION (vue, tâche Celery, commande de management) ne
     doit jamais appeler cette fonction : le workflow réel, humain, en
-    production reste strictement « Préparer » (prepare_planned_content) ->
-    « Envoyer les tests » (send_test_email, un clic explicite) -> « Valider
-    et programmer » (validate_planned_content, un second clic explicite,
-    séparé et délibéré). Les vues de production (acquisition_views.py::
-    email_planning_prepare_week/email_planning_send_tests/
-    email_planning_validate_and_schedule) appellent chacune directement les
+    production reste « Préparer » (prepare_planned_content) -> optionnellement
+    « Envoyer un test » (send_test_email) -> « Programmer »
+    (validate_planned_content), chacune une action explicite séparée. Les
+    vues de production (acquisition_views.py::email_planning_prepare_week/
+    email_planning_send_tests/email_planning_validate_and_schedule/
+    email_planning_content_detail) appellent chacune directement les
     fonctions ci-dessus, jamais ce combinateur.
 
     Le test part vers `test_recipient`, ou à défaut l'adresse d'expédition
