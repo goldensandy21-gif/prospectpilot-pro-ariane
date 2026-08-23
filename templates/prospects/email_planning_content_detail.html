@@ -26,7 +26,7 @@
         <button class="btn btn-outline-dark" type="submit">Envoyer un test (facultatif, vers {{ test_recipient }})</button>
       </form>
       <form method="post" action="{% url 'email_planning_content_detail' planned.pk %}"
-            onsubmit="return confirm('Programmer cet email pour {{ planned.campaign_prospect.prospect.name }} ? Aucun email ne sera envoyé immédiatement — il partira à la date prévue ({{ planned.scheduled_date|date:\"d/m/Y\" }}).');">
+            onsubmit="return confirm('Programmer cet email pour {{ planned.campaign_prospect.prospect.name }} ? Aucun email ne sera envoyé immédiatement — il partira à la date prévue ({{ planned.scheduled_date|date:'d/m/Y' }}).');">
         {% csrf_token %}
         <input type="hidden" name="action" value="programmer">
         <button class="btn btn-primary-custom" type="submit">Programmer</button>

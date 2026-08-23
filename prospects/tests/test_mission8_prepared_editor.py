@@ -8,6 +8,7 @@ rédactionnel jamais du HTML brut, test facultatif, Programmer individuel),
 la sélection multiple + Programmer la sélection, et la levée du verrou
 `tested_content_hash` (le test n'est plus une condition de validation)."""
 import datetime
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth.models import User
 from django.core import mail
@@ -15,7 +16,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from prospects.models import CampaignProspect, EmailSend, PlannedEmailContent
+from prospects.models import CampaignProspect, EmailAutomationSettings, EmailSend, PlannedEmailContent
 from prospects.services.campaign_sequencing import advance_campaign_prospect
 from prospects.services.email_automation import (
     apply_manual_edit,
@@ -27,6 +28,16 @@ from prospects.services.email_automation import (
 
 from .factories import make_compliance_profile, make_icp, make_product, make_prospect, make_public_email
 from .test_mission8_email_automation import make_planning_campaign
+
+
+def _current_planning_monday():
+    """Reproduit exactement le calcul de « semaine courante » utilisé par
+    email_planning_prepared() (fuseau EmailAutomationSettings.timezone_name,
+    pas simplement la date UTC naïve) — pour que les scheduled_date fabriqués
+    dans les tests tombent bien dans la même semaine que celle affichée."""
+    tz = ZoneInfo(EmailAutomationSettings.current().timezone_name)
+    today = timezone.now().astimezone(tz).date()
+    return today - datetime.timedelta(days=today.weekday())
 
 
 class PreparedEmailsListTests(TestCase):
@@ -49,8 +60,7 @@ class PreparedEmailsListTests(TestCase):
             self.members.append(member)
 
     def test_all_prepared_emails_appear_in_the_interface(self):
-        today = timezone.now().date()
-        monday_this_week = today - datetime.timedelta(days=today.weekday())
+        monday_this_week = _current_planning_monday()
         for member in self.members:
             prepare_planned_content(member, self.steps[0], monday_this_week)
 
@@ -62,8 +72,7 @@ class PreparedEmailsListTests(TestCase):
         self.assertEqual(names, {"Prospect0", "Prospect1", "Prospect2"})
 
     def test_only_current_week_planned_content_is_listed(self):
-        today = timezone.now().date()
-        monday_this_week = today - datetime.timedelta(days=today.weekday())
+        monday_this_week = _current_planning_monday()
         far_future = monday_this_week + datetime.timedelta(days=60)
         prepare_planned_content(self.members[0], self.steps[0], monday_this_week)
         prepare_planned_content(self.members[1], self.steps[0], far_future)
@@ -72,6 +81,66 @@ class PreparedEmailsListTests(TestCase):
         rows = response.context["rows"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["planned"].campaign_prospect.prospect.name, "Prospect0")
+
+
+class ContentDetailGetViewTests(TestCase):
+    """Reproduit le bug production (Server Error 500) : un simple GET de la
+    page détail d'un PlannedEmailContent doit toujours rendre 200, jamais
+    planter — que ce soit à cause d'un template cassé, d'un mauvais
+    reverse(), ou d'un accès invalide à un champ. Le GET ne doit strictement
+    rien modifier (ni envoi SMTP, ni statut de programmation)."""
+
+    def setUp(self):
+        self.product = make_product()
+        make_compliance_profile(self.product)
+        self.icp = make_icp(self.product)
+        self.user = User.objects.create_user(username="editorG", password="x")
+        self.client = Client()
+        self.client.force_login(self.user)
+        self.campaign = make_planning_campaign(self.product, self.icp)
+        self.prospect = make_prospect(name="Boulangerie Dupont")
+        make_public_email(self.prospect, email="dupont@example.com")
+        self.member = CampaignProspect.objects.create(campaign=self.campaign, prospect=self.prospect, status="selected")
+        self.step1 = self.campaign.sequence.steps.get(order=1)
+        self.planned = prepare_planned_content(self.member, self.step1, _current_planning_monday())
+
+    def test_get_content_detail_returns_200_not_500(self):
+        response = self.client.get(reverse("email_planning_content_detail", args=[self.planned.pk]))
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_content_detail_displays_prospect_email_step_and_subject(self):
+        response = self.client.get(reverse("email_planning_content_detail", args=[self.planned.pk]))
+        content = response.content.decode()
+        self.assertIn("Boulangerie Dupont", content)
+        self.assertIn("dupont@example.com", content)
+        self.assertIn(self.step1.name, content)
+        self.assertIn(self.planned.subject, content)
+
+    def test_get_content_detail_does_not_send_any_commercial_email(self):
+        commercial_before = EmailSend.objects.filter(is_test=False).count()
+        outbox_before = len(mail.outbox)
+        response = self.client.get(reverse("email_planning_content_detail", args=[self.planned.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(EmailSend.objects.filter(is_test=False).count(), commercial_before)
+        self.assertEqual(len(mail.outbox), outbox_before)
+
+    def test_get_content_detail_does_not_change_approval_or_status(self):
+        status_before = self.planned.status
+        response = self.client.get(reverse("email_planning_content_detail", args=[self.planned.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.planned.refresh_from_db()
+        self.assertEqual(self.planned.status, status_before)
+        self.assertIsNone(self.planned.approved_by)
+        self.assertIsNone(self.planned.approved_at)
+
+    def test_link_from_prepared_list_to_content_detail_resolves_and_loads(self):
+        list_response = self.client.get(reverse("email_planning_prepared"))
+        self.assertEqual(list_response.status_code, 200)
+        detail_url = reverse("email_planning_content_detail", args=[self.planned.pk])
+        self.assertIn(detail_url, list_response.content.decode())
+
+        detail_response = self.client.get(detail_url)
+        self.assertEqual(detail_response.status_code, 200)
 
 
 class ManualEditTests(TestCase):
