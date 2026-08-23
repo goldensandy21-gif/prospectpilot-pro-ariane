@@ -122,10 +122,13 @@ class AcquisitionSearchForm(forms.Form):
 class CampaignCreateForm(forms.ModelForm):
     class Meta:
         model = Campaign
-        fields = ["name", "product", "icp", "sequence", "objective", "score_threshold", "daily_send_limit", "total_limit", "start_date", "end_date"]
+        fields = ["name", "product", "icp", "sequence", "objective", "score_threshold", "daily_send_limit", "total_limit", "start_date", "end_date", "planning_managed"]
         widgets = {
             "start_date": forms.DateInput(attrs={"type": "date"}),
             "end_date": forms.DateInput(attrs={"type": "date"}),
+        }
+        labels = {
+            "planning_managed": "Piloter depuis le Planning e-mail (J0/J4/J8/J14, validation obligatoire avant envoi)",
         }
 
     def __init__(self, *args, **kwargs):

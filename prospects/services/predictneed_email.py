@@ -4,6 +4,7 @@ Séparé du moteur legacy (emailing.py / EMAIL_DESIGNS) : sobre, un seul CTA, pa
 d'image Unsplash, texte + HTML systématiques. Le contenu commercial (observation,
 angle) vient uniquement de AgentBrief/ProspectSignal — jamais inventé.
 """
+import secrets
 import uuid
 from email.utils import make_msgid
 from html import escape
@@ -17,7 +18,7 @@ from ..models import ContactLog, EmailSend, EngagementEvent
 from .compliance_footer import render_compliance_footer_html, render_compliance_footer_text
 from .email_identity import format_from_header, get_sender_identity
 from .suppression import is_suppressed
-from .tracking import build_privacy_url, build_tracking_url, build_unsubscribe_url, resolve_target_url
+from .tracking import build_open_tracking_url, build_privacy_url, build_tracking_url, build_unsubscribe_url, resolve_target_url
 
 DEFAULT_CTA_LABELS = {
     "simulator": "Tester le simulateur",
@@ -165,7 +166,7 @@ def _benefit_block_html(title, description):
     )
 
 
-def render_predictneed_html(ctx, product, compliance_profile, prospect, email):
+def render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=None):
     greeting = f"Bonjour {escape(ctx['first_name'])}," if ctx["first_name"] else "Bonjour,"
 
     intro_html = ""
@@ -233,6 +234,14 @@ def render_predictneed_html(ctx, product, compliance_profile, prospect, email):
 
     signature_html = "<br>".join(escape(line) for line in _signature_lines(product))
 
+    # Section H (automatisation email) — pixel d'ouverture indicatif, jamais
+    # pour un envoi is_test (aucun open_tracking_url n'est alors fourni par
+    # l'appelant). 1x1 transparent, en toute fin de corps, sans dépendance
+    # requise au rendu du reste de l'email si l'image est bloquée.
+    pixel_html = ""
+    if open_tracking_url:
+        pixel_html = f'<img src="{escape(open_tracking_url)}" width="1" height="1" alt="" style="display:block;border:0;">'
+
     return (
         '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1.0"></head>'
@@ -256,11 +265,11 @@ def render_predictneed_html(ctx, product, compliance_profile, prospect, email):
         f'<p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:{INK};">Bien cordialement,<br>{signature_html}</p>'
         "</td></tr>"
         f"{render_compliance_footer_html(prospect, product, compliance_profile, ctx['unsubscribe_url'], ctx['privacy_url'], email)}"
-        "</table></td></tr></table></body></html>"
+        f"</table></td></tr></table>{pixel_html}</body></html>"
     )
 
 
-def render_predictneed_email(campaign_prospect, email_step=None, email_variant=None, request=None):
+def render_predictneed_email(campaign_prospect, email_step=None, email_variant=None, request=None, open_tracking_token=None):
     prospect = campaign_prospect.prospect
     product = campaign_prospect.campaign.product
     compliance_profile = getattr(product, "compliance_profile", None)
@@ -268,19 +277,41 @@ def render_predictneed_email(campaign_prospect, email_step=None, email_variant=N
 
     ctx = build_predictneed_context(campaign_prospect, email_step=email_step, email_variant=email_variant, request=request)
     subject = render_predictneed_subject(email_variant, ctx)
-    html = render_predictneed_html(ctx, product, compliance_profile, prospect, email)
+    open_tracking_url = build_open_tracking_url(open_tracking_token, request=request) if open_tracking_token else None
+    html = render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=open_tracking_url)
     text = render_predictneed_text(ctx, product, compliance_profile, prospect, email)
     return subject, html, text
 
 
-def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_variant=None, request=None, is_test=False, test_recipient=""):
+def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_variant=None, request=None, is_test=False, test_recipient="", frozen_content=None):
     """ETAPE 22/24/25 — envoi réel, avec re-vérification de l'opposition juste
-    avant SMTP, identité d'expéditeur centralisée, Message-ID et List-Unsubscribe."""
+    avant SMTP, identité d'expéditeur centralisée, Message-ID et List-Unsubscribe.
+
+    `frozen_content` (section E, automatisation email) : dict optionnel
+    {"subject", "html_body", "text_body", "open_tracking_token"} produit par
+    services/email_automation.py::freeze_planned_content(). Quand fourni, le
+    contenu n'est PAS régénéré ici — c'est exactement le contenu approuvé et
+    figé au moment de la validation humaine qui part en SMTP, jamais un
+    nouveau rendu silencieux. Sans `frozen_content`, comportement inchangé
+    (rendu live, comme avant cette section)."""
     prospect = campaign_prospect.prospect
     campaign = campaign_prospect.campaign
     product = campaign.product
 
-    subject, html, text = render_predictneed_email(campaign_prospect, email_step, email_variant, request)
+    if frozen_content:
+        subject = frozen_content["subject"]
+        html = frozen_content["html_body"]
+        text = frozen_content["text_body"]
+        open_tracking_token = frozen_content.get("open_tracking_token", "")
+    else:
+        # Pixel d'ouverture (section H) : jamais pour un envoi de test, pour
+        # ne polluer aucune donnée commerciale ; token opaque non séquentiel.
+        open_tracking_token = "" if is_test else secrets.token_urlsafe(32)
+        subject, html, text = render_predictneed_email(
+            campaign_prospect, email_step, email_variant, request,
+            open_tracking_token=open_tracking_token or None,
+        )
+
     identity = get_sender_identity(product=product, campaign=campaign)
     to_email = test_recipient if is_test else (prospect.public_email or "")
 
@@ -297,6 +328,7 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
         text_body=text,
         status="draft",
         is_test=is_test,
+        open_tracking_token=open_tracking_token,
     )
 
     if not to_email:

@@ -701,6 +701,14 @@ class EmailSend(models.Model):
 
     is_test = models.BooleanField(default=False)
 
+    # Section H (automatisation email) — pixel d'ouverture indicatif, jamais
+    # pour les envois de test (voir services/email_automation.py). Token
+    # opaque non séquentiel, jamais l'IP du lecteur (non indispensable).
+    open_tracking_token = models.CharField(max_length=64, blank=True, db_index=True)
+    first_opened_at = models.DateTimeField(null=True, blank=True)
+    last_opened_at = models.DateTimeField(null=True, blank=True)
+    open_count = models.PositiveIntegerField(default=0)
+
     error = models.TextField(blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

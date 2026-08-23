@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Planning e-mail | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="section-header">
+  <div><span class="eyebrow">CAMPAGNES</span><h1>Planning e-mail</h1>
+    <p>Séquence J0 → J4 → J8 → J14, timezone {{ settings.timezone_name }}, fenêtre {{ settings.send_window_start|time:"H:i" }}–{{ settings.send_window_end|time:"H:i" }}, jours ouvrés uniquement.</p>
+  </div>
+</section>
+<section class="container-fluid px-lg-4 pb-5">
+
+  <div class="cockpit-card mb-3">
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <form method="post" action="{% url 'email_planning_prepare_week' %}">{% csrf_token %}
+        <button class="btn btn-outline-dark">Préparer la semaine</button>
+      </form>
+      <form method="post" action="{% url 'email_planning_send_tests' %}">{% csrf_token %}
+        <button class="btn btn-outline-dark">Envoyer les tests à {{ test_recipient }}</button>
+      </form>
+      <form method="post" action="{% url 'email_planning_validate_and_schedule' %}" onsubmit="return confirm('Valider et programmer la semaine ? Le contenu approuvé sera figé et deviendra envoyable par le scheduler.');">{% csrf_token %}
+        <button class="btn btn-primary-custom">Valider et programmer la semaine</button>
+      </form>
+    </div>
+    <p class="text-muted small mt-2 mb-0">
+      Réglages : {{ settings.new_contacts_per_day }} nouveau(x) contact(s)/jour, {{ settings.daily_total_limit }} envoi(s) total/jour (relances comprises).
+      Sans validation explicite : aucun envoi commercial automatique.
+    </p>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-6">
+      <div class="cockpit-card">
+        <h2 class="h6">Cette semaine</h2>
+        <p class="text-muted small">{{ this_week.0|date:"d/m" }} → {{ this_week.4|date:"d/m" }}</p>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="cockpit-card">
+        <h2 class="h6">Semaine suivante</h2>
+        <p class="text-muted small">{{ next_week.0|date:"d/m" }} → {{ next_week.4|date:"d/m" }}</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="cockpit-card">
+    {% if rows %}
+      <div class="table-responsive">
+        <table class="table commercial-table align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Entreprise</th><th>Destinataire</th><th>Étape</th><th>Date prévue</th><th>Sujet</th>
+              <th>Statut</th><th>Ouverture</th><th>Clic</th><th>Réponse</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr>
+                <td><strong>{{ row.cp.prospect.name }}</strong></td>
+                <td>{{ row.cp.prospect.public_email|default:"—" }}</td>
+                <td>{{ row.step.name|default:"—" }}</td>
+                <td>{{ row.planned.scheduled_date|date:"d/m/Y"|default:"—" }}</td>
+                <td>{{ row.planned.subject|default:"—"|truncatechars:50 }}</td>
+                <td>
+                  <span class="status-pill
+                    {% if row.status == 'Envoyé' %}status-success
+                    {% elif row.status == 'Validé' %}status-success
+                    {% elif row.status == 'Arrêté' or row.status == 'Bloqué' %}status-danger
+                    {% elif row.status == 'Terminé' %}status-muted
+                    {% else %}status-warning{% endif %}">{{ row.status }}</span>
+                </td>
+                <td>{% if row.sent_record.first_opened_at %}Ouverture détectée (indicative) — {{ row.sent_record.first_opened_at|date:"d/m H:i" }}{% else %}—{% endif %}</td>
+                <td>{% if row.clicked %}Clic détecté{% else %}—{% endif %}</td>
+                <td>{% if row.replied %}A répondu{% else %}—{% endif %}</td>
+                <td class="d-flex gap-1">
+                  <a class="btn btn-sm btn-outline-dark" href="{% url 'campaign_preview' row.cp.campaign_id %}?cp={{ row.cp.pk }}">Aperçu</a>
+                  {% if row.step %}
+                  <form method="post" action="{% url 'email_planning_stop' row.cp.pk %}" onsubmit="return confirm('Arrêter cette séquence ?');">{% csrf_token %}
+                    <button class="btn btn-sm btn-outline-danger">Arrêter</button>
+                  </form>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <div class="empty-state-title">Aucune campagne planifiée pour le moment.</div>
+        <p>Créez une campagne, cochez « pilotée par le Planning e-mail », puis revenez ici pour préparer, valider et programmer la semaine.</p>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

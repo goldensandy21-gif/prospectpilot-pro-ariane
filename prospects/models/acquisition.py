@@ -3,6 +3,7 @@
 These models are additive — nothing here removes or renames existing Prospect-related
 functionality in core.py. They live in the same Django app/migration history.
 """
+import datetime
 import secrets
 import uuid
 
@@ -11,6 +12,14 @@ from django.db import models
 from django.utils import timezone
 
 from .core import Prospect
+
+
+def _default_window_start():
+    return datetime.time(9, 30)
+
+
+def _default_window_end():
+    return datetime.time(11, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +573,13 @@ class Campaign(models.Model):
     validated_at = models.DateTimeField(null=True, blank=True)
     validated_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="validated_campaigns")
 
+    # Automatisation email planifiée (Planning e-mail) — additif, jamais
+    # activé sur les campagnes existantes/manuelles. Seules les campagnes
+    # explicitement marquées ici passent par le scheduler Celery et exigent
+    # un contenu figé (PlannedEmailContent) avant tout envoi automatique ;
+    # les campagnes manuelles gardent leur comportement d'avant, inchangé.
+    planning_managed = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["-created_at"]
 
@@ -719,6 +735,8 @@ class EngagementEvent(models.Model):
         ("email_sent", "E-mail envoyé"),
         ("email_failed", "E-mail en échec"),
         ("link_clicked", "Lien cliqué"),
+        ("email_opened", "Ouverture détectée (indicative)"),
+        ("email_replied", "Réponse reçue"),
         ("product_visited", "Visite du produit"),
         ("simulator_started", "Simulateur démarré"),
         ("simulator_completed", "Simulateur terminé"),
@@ -796,3 +814,77 @@ class RevenueAttribution(models.Model):
 
     def __str__(self):
         return f"{self.mrr} {self.currency} MRR - {self.prospect}"
+
+
+# ---------------------------------------------------------------------------
+# Automatisation email planifiée — Planning e-mail (J0/J4/J8/J14)
+#
+# Étend Campaign/CampaignProspect/EmailStep existants (campaign_sequencing.py
+# reste le seul moteur d'exécution) — pas de second système de campagne.
+# ---------------------------------------------------------------------------
+
+class EmailAutomationSettings(models.Model):
+    """Réglages administrables du Planning e-mail — une seule ligne vivante
+    (settings courants). Modifiables depuis l'interface, jamais en dur dans
+    le code du scheduler."""
+    timezone_name = models.CharField(max_length=64, default="Europe/Paris")
+    send_window_start = models.TimeField(default=_default_window_start)
+    send_window_end = models.TimeField(default=_default_window_end)
+    new_contacts_per_day = models.PositiveSmallIntegerField(default=5)
+    daily_total_limit = models.PositiveSmallIntegerField(default=10)
+    active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+
+    class Meta:
+        verbose_name = "Réglages du Planning e-mail"
+        verbose_name_plural = "Réglages du Planning e-mail"
+
+    def __str__(self):
+        return f"Planning e-mail ({self.timezone_name}, {self.new_contacts_per_day}/j nouveaux, {self.daily_total_limit}/j total)"
+
+    @classmethod
+    def current(cls):
+        settings_row = cls.objects.order_by("-updated_at").first()
+        return settings_row or cls.objects.create()
+
+
+class PlannedEmailContent(models.Model):
+    """Contenu figé et approuvé pour UNE étape (J0/J4/J8/J14) d'UN
+    CampaignProspect précis. Tant que cette ligne n'existe pas pour l'étape
+    due, le scheduler automatisé n'envoie rien (voir
+    services/email_automation.py::run_planning_scheduler). Sujet/HTML/texte
+    ici sont ceux réellement envoyés — jamais régénérés silencieusement au
+    moment SMTP."""
+    campaign_prospect = models.ForeignKey(CampaignProspect, related_name="planned_contents", on_delete=models.CASCADE)
+    email_step = models.ForeignKey(EmailStep, on_delete=models.CASCADE)
+
+    subject = models.CharField(max_length=255)
+    html_body = models.TextField()
+    text_body = models.TextField()
+    content_hash = models.CharField(max_length=64, help_text="Empreinte du rendu au moment de la validation, pour détecter un contenu devenu obsolète.")
+    open_tracking_token = models.CharField(max_length=64, blank=True, help_text="Token du pixel d'ouverture déjà intégré dans html_body — recopié sur EmailSend à l'envoi réel.")
+
+    scheduled_date = models.DateField(help_text="Jour ouvré prévu (déjà ajusté week-end).")
+
+    approved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    STATUS = [
+        ("to_validate", "À valider"),
+        ("validated", "Validé"),
+        ("stale", "Contenu modifié depuis validation"),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS, default="to_validate")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["campaign_prospect", "email_step"], name="unique_planned_content_per_step"),
+        ]
+        ordering = ["scheduled_date"]
+
+    def __str__(self):
+        return f"{self.campaign_prospect} - {self.email_step} ({self.status})"

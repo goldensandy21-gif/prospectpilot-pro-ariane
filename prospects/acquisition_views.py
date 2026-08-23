@@ -11,6 +11,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
+from datetime import timedelta
+
 from .forms import AcquisitionSearchForm, CampaignCreateForm, EmailComplianceProfileForm, ProductProfileForm
 from .services.deliverability import diagnose_domain
 from .models import (
@@ -18,22 +20,31 @@ from .models import (
     CampaignProspect,
     CompanySearchRun,
     ConversionEvent,
+    EmailAutomationSettings,
     EmailComplianceProfile,
     EmailSend,
     EngagementEvent,
     ICPProfile,
+    PlannedEmailContent,
     ProductProfile,
     Prospect,
     RevenueAttribution,
 )
 from .services.campaign_sending import get_or_create_default_sequence, send_campaign_batch
 from .services.campaign_metrics import annotate_campaigns_with_metrics, campaign_performance_summary
+from .services.campaign_sequencing import _next_step as _sequence_next_step
 from .services.commercial_timeline import build_prospect_timeline
+from .services.email_automation import compute_scheduled_date, freeze_planned_content, mark_stale_if_changed
 from .services.predictneed_email import render_predictneed_email, send_predictneed_campaign_email
 from .services.provenance import get_email_provenance
 from .services.suppression import is_suppressed
 from .services.tracking import resolve_target_url
 from .tasks import run_company_search_run_task
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    from backports.zoneinfo import ZoneInfo
 
 
 # ---------------------------------------------------------------------------
@@ -47,13 +58,17 @@ def campaign_click(request, token):
     variant_id = request.GET.get("variant") or None
 
     target_url = resolve_target_url(campaign_prospect, cta_type)
+    # Section I (automatisation email) : observabilité légère du clic
+    # (User-Agent tronqué) — n'affirme jamais distinguer humain vs scanner,
+    # simple donnée brute disponible pour une lecture manuelle ultérieure.
+    user_agent = request.META.get("HTTP_USER_AGENT", "")[:300]
     EngagementEvent.objects.create(
         campaign_prospect=campaign_prospect,
         prospect=campaign_prospect.prospect,
         campaign=campaign_prospect.campaign,
         email_step_id=step_id, email_variant_id=variant_id,
         event_type="link_clicked", source="prospectpilot",
-        metadata={"cta": cta_type},
+        metadata={"cta": cta_type, "user_agent": user_agent},
     )
     campaign_prospect.last_engagement_at = timezone.now()
     if campaign_prospect.status == "contacted":
@@ -63,6 +78,37 @@ def campaign_click(request, token):
     if not target_url:
         return HttpResponse("Lien non configuré pour ce produit.", status=404)
     return HttpResponseRedirect(target_url)
+
+
+# 1x1 transparent GIF, served with no external dependency.
+_TRACKING_PIXEL_GIF = bytes.fromhex(
+    "47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b"
+)
+
+
+def track_email_open(request, token):
+    """Section H (automatisation email) — pixel d'ouverture indicatif.
+    Jamais pour un EmailSend is_test (aucun token n'est alors généré à
+    l'envoi, voir services/predictneed_email.py). Ne stocke aucune IP."""
+    record = EmailSend.objects.filter(open_tracking_token=token, is_test=False).first()
+    if record:
+        now = timezone.now()
+        first_open = record.first_opened_at is None
+        record.last_opened_at = now
+        record.open_count = record.open_count + 1
+        if first_open:
+            record.first_opened_at = now
+        record.save(update_fields=["first_opened_at", "last_opened_at", "open_count"])
+        if first_open:
+            EngagementEvent.objects.create(
+                campaign_prospect=record.campaign_prospect,
+                prospect=record.prospect,
+                campaign=record.campaign_prospect.campaign if record.campaign_prospect else None,
+                email_step=record.email_step, email_variant=record.email_variant,
+                event_type="email_opened", source="prospectpilot",
+                metadata={"email_send_id": record.pk},
+            )
+    return HttpResponse(_TRACKING_PIXEL_GIF, content_type="image/gif")
 
 
 # ---------------------------------------------------------------------------
@@ -526,3 +572,201 @@ def email_settings(request):
         "deliverability": deliverability, "smtp_configured": smtp_configured,
         "sender_email": product.sender_email, "reply_to_email": product.reply_to_email,
     })
+
+
+# ---------------------------------------------------------------------------
+# Planning e-mail — automatisation J0/J4/J8/J14 (Campagnes > Planning e-mail)
+#
+# Périmètre assumé : cette page planifie/valide/envoie la séquence pour des
+# CampaignProspect DÉJÀ inscrits dans une campagne planning_managed=True —
+# elle n'invente pas de nouvel algorithme de sélection de prospects dans
+# toute la base (la sélection reste la Recherche intelligente / création de
+# campagne existante). Une campagne planning_managed se crée normalement
+# (campaign_create), puis se pilote ensuite depuis cette page.
+# ---------------------------------------------------------------------------
+
+def _week_dates(reference_date, offset_weeks=0):
+    monday = reference_date - timedelta(days=reference_date.weekday()) + timedelta(weeks=offset_weeks)
+    return [monday + timedelta(days=i) for i in range(5)]
+
+
+def _planning_rows(campaign_prospects):
+    rows = []
+    for cp in campaign_prospects:
+        sequence = cp.campaign.sequence
+        if not sequence:
+            continue
+        next_step = _sequence_next_step(cp)
+
+        if cp.status in ("do_not_contact", "lost", "excluded"):
+            status_label = "Arrêté" if cp.status == "excluded" else "Bloqué"
+            rows.append({"cp": cp, "step": next_step, "status": status_label, "planned": None})
+            continue
+
+        if next_step is None:
+            rows.append({"cp": cp, "step": None, "status": "Terminé", "planned": None})
+            continue
+
+        sent_record = EmailSend.objects.filter(
+            campaign_prospect=cp, email_step=next_step, is_test=False, status="sent",
+        ).order_by("-sent_at").first()
+        if sent_record:
+            clicked = cp.events.filter(event_type="link_clicked").exists()
+            replied = cp.prospect.contact_logs.filter(outcome="replied").exists()
+            rows.append({
+                "cp": cp, "step": next_step, "status": "Envoyé", "planned": None,
+                "sent_record": sent_record, "clicked": clicked, "replied": replied,
+            })
+            continue
+
+        planned = PlannedEmailContent.objects.filter(campaign_prospect=cp, email_step=next_step).first()
+        if planned:
+            mark_stale_if_changed(planned)
+            planned.refresh_from_db()
+        status_label = {
+            None: "Brouillon",
+            "to_validate": "À valider",
+            "stale": "À valider (contenu modifié)",
+            "validated": "Validé",
+        }[planned.status if planned else None]
+
+        rows.append({"cp": cp, "step": next_step, "status": status_label, "planned": planned})
+    return rows
+
+
+@login_required
+def email_planning(request):
+    settings_row = EmailAutomationSettings.current()
+    tz = ZoneInfo(settings_row.timezone_name)
+    today = timezone.now().astimezone(tz).date()
+
+    campaigns = Campaign.objects.filter(planning_managed=True).select_related("product", "sequence")
+    campaign_prospects = (
+        CampaignProspect.objects.filter(campaign__in=campaigns)
+        .select_related("campaign", "campaign__sequence", "prospect", "current_step")
+        .order_by("-acquisition_score_snapshot")
+    )
+    rows = _planning_rows(campaign_prospects)
+
+    return render(request, "prospects/email_planning.html", {
+        "settings": settings_row,
+        "this_week": _week_dates(today, 0),
+        "next_week": _week_dates(today, 1),
+        "rows": rows,
+        "test_recipient": settings.EMAIL_HOST_USER or "contact-predict@predictneed-ia.com",
+    })
+
+
+@login_required
+def email_planning_prepare_week(request):
+    """« Préparer la semaine » — pour chaque CampaignProspect planning_managed
+    dont la prochaine étape est due (délai écoulé, comme
+    campaign_sequencing.advance_campaign_prospect le vérifierait), crée/
+    rafraîchit une ligne PlannedEmailContent en statut « à valider ». N'envoie
+    rien."""
+    if request.method != "POST":
+        return redirect("email_planning")
+
+    campaigns = Campaign.objects.filter(planning_managed=True).select_related("sequence")
+    count = 0
+    for cp in CampaignProspect.objects.filter(campaign__in=campaigns).exclude(
+        status__in=["do_not_contact", "lost", "paying", "excluded", "churned"],
+    ).select_related("campaign__sequence", "current_step"):
+        sequence = cp.campaign.sequence
+        if not sequence:
+            continue
+        next_step = _sequence_next_step(cp)
+        if next_step is None:
+            continue
+        existing = PlannedEmailContent.objects.filter(campaign_prospect=cp, email_step=next_step).first()
+        if existing and existing.status == "validated":
+            continue  # déjà validé — ne pas repasser à "à valider" silencieusement
+
+        first_contact_date = (cp.contacted_at or timezone.now()).date()
+        scheduled_date = compute_scheduled_date(first_contact_date, sequence, next_step)
+        variant = next_step.variants.filter(active=True).first()
+        if not variant:
+            continue
+        subject, html, text = render_predictneed_email(cp, next_step, variant, request)
+        from .services.email_automation import content_hash_for
+        PlannedEmailContent.objects.update_or_create(
+            campaign_prospect=cp, email_step=next_step,
+            defaults={
+                "subject": subject, "html_body": html, "text_body": text,
+                "content_hash": content_hash_for(subject, html, text),
+                "scheduled_date": scheduled_date, "status": "to_validate",
+                "approved_by": None, "approved_at": None,
+            },
+        )
+        count += 1
+
+    messages.success(request, f"{count} étape(s) préparée(s) — à valider avant tout envoi.")
+    return redirect("email_planning")
+
+
+@login_required
+def email_planning_send_tests(request):
+    """Envoie chaque contenu « à valider »/« modifié » en mode test UNIQUEMENT
+    vers l'adresse de test contrôlée — jamais au prospect, ne compte jamais
+    comme premier contact commercial, ne crée aucun engagement commercial."""
+    if request.method != "POST":
+        return redirect("email_planning")
+
+    test_recipient = settings.EMAIL_HOST_USER or "contact-predict@predictneed-ia.com"
+    campaigns = Campaign.objects.filter(planning_managed=True)
+    sent = 0
+    for planned in PlannedEmailContent.objects.filter(
+        campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
+    ).select_related("campaign_prospect", "email_step"):
+        variant = planned.email_step.variants.filter(active=True).first()
+        record = send_predictneed_campaign_email(
+            planned.campaign_prospect, email_step=planned.email_step, email_variant=variant,
+            is_test=True, test_recipient=test_recipient,
+        )
+        if record.status == "sent":
+            sent += 1
+
+    messages.success(request, f"{sent} e-mail(s) de test envoyé(s) à {test_recipient}. Aucun envoi commercial.")
+    return redirect("email_planning")
+
+
+@login_required
+def email_planning_validate_and_schedule(request):
+    """« Valider et programmer la semaine » — trace d'approbation explicite
+    (qui/quand/quel contenu) et fige le contenu réellement envoyé plus tard.
+    Seule cette action fait passer un PlannedEmailContent à "validated" ;
+    sans elle, le scheduler automatisé (section F) n'envoie jamais rien."""
+    if request.method != "POST":
+        return redirect("email_planning")
+
+    campaigns = Campaign.objects.filter(planning_managed=True)
+    count = 0
+    for planned in PlannedEmailContent.objects.filter(
+        campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
+    ).select_related("campaign_prospect", "email_step"):
+        freeze_planned_content(planned.campaign_prospect, planned.email_step, request.user, planned.scheduled_date)
+        count += 1
+
+    messages.success(request, f"{count} étape(s) validée(s) et programmée(s) par {request.user.username}.")
+    return redirect("email_planning")
+
+
+@login_required
+def email_planning_pause(request, pk):
+    campaign = get_object_or_404(Campaign, pk=pk, planning_managed=True)
+    if request.method == "POST":
+        campaign.status = "paused"
+        campaign.save(update_fields=["status"])
+        messages.success(request, f"Campagne « {campaign.name} » mise en pause.")
+    return redirect("email_planning")
+
+
+@login_required
+def email_planning_stop(request, cp_id):
+    cp = get_object_or_404(CampaignProspect, pk=cp_id, campaign__planning_managed=True)
+    if request.method == "POST":
+        cp.status = "excluded"
+        cp.excluded_reason = f"Arrêt manuel par {request.user.username} depuis le Planning e-mail."
+        cp.save(update_fields=["status", "excluded_reason"])
+        messages.success(request, f"Séquence arrêtée pour {cp.prospect.name}.")
+    return redirect("email_planning")

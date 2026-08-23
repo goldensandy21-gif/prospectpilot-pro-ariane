@@ -52,6 +52,15 @@ urlpatterns = [
     # ETAPE 15/17 — campagnes
     path("campaigns/",acquisition_views.campaign_list,name="campaign_list"),
     path("campaigns/new/",acquisition_views.campaign_create,name="campaign_create"),
+
+    # Automatisation email planifiée — Planning e-mail
+    path("campaigns/planning/",acquisition_views.email_planning,name="email_planning"),
+    path("campaigns/planning/prepare/",acquisition_views.email_planning_prepare_week,name="email_planning_prepare_week"),
+    path("campaigns/planning/send-tests/",acquisition_views.email_planning_send_tests,name="email_planning_send_tests"),
+    path("campaigns/planning/validate/",acquisition_views.email_planning_validate_and_schedule,name="email_planning_validate_and_schedule"),
+    path("campaigns/planning/<int:pk>/pause/",acquisition_views.email_planning_pause,name="email_planning_pause"),
+    path("campaigns/planning/prospect/<int:cp_id>/stop/",acquisition_views.email_planning_stop,name="email_planning_stop"),
+
     path("campaigns/<int:pk>/",acquisition_views.campaign_detail,name="campaign_detail"),
     path("campaigns/<int:pk>/preview/",acquisition_views.campaign_preview,name="campaign_preview"),
     path("campaigns/<int:pk>/validate/",acquisition_views.campaign_validate,name="campaign_validate"),
@@ -60,6 +69,9 @@ urlpatterns = [
 
     # ETAPE 19 — tracking de clic
     path("t/<str:token>/",acquisition_views.campaign_click,name="campaign_click"),
+
+    # Section H (automatisation email) — pixel d'ouverture indicatif
+    path("o/<str:token>.gif",acquisition_views.track_email_open,name="track_email_open"),
 
     # ETAPE 16 — transparence individuelle
     path("privacy/prospect/<uuid:token>/",acquisition_views.prospect_privacy,name="prospect_privacy"),

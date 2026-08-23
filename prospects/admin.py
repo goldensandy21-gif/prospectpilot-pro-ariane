@@ -40,6 +40,8 @@ from .models import (
     ConversionEvent,
     RevenueAttribution,
     EmailComplianceProfile,
+    EmailAutomationSettings,
+    PlannedEmailContent,
 )
 
 
@@ -427,3 +429,17 @@ class EmailComplianceProfileAdmin(admin.ModelAdmin):
     @admin.display(description="Conformité prête")
     def compliance_ready_display(self, obj):
         return obj.compliance_ready
+
+
+@admin.register(EmailAutomationSettings)
+class EmailAutomationSettingsAdmin(admin.ModelAdmin):
+    list_display = ("timezone_name", "send_window_start", "send_window_end", "new_contacts_per_day", "daily_total_limit", "active", "updated_at")
+    readonly_fields = ("updated_at",)
+
+
+@admin.register(PlannedEmailContent)
+class PlannedEmailContentAdmin(admin.ModelAdmin):
+    list_display = ("campaign_prospect", "email_step", "status", "scheduled_date", "approved_by", "approved_at")
+    list_filter = ("status", "email_step")
+    search_fields = ("campaign_prospect__prospect__name", "subject")
+    readonly_fields = ("content_hash", "open_tracking_token", "created_at", "updated_at")

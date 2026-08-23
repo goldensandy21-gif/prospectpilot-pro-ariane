@@ -67,3 +67,11 @@ def build_privacy_url(prospect, request=None):
 def build_unsubscribe_url(prospect, request=None):
     path = reverse("unsubscribe", kwargs={"token": prospect.unsubscribe_token})
     return f"{_base_url(request)}{path}"
+
+
+def build_open_tracking_url(open_tracking_token, request=None):
+    """Section H (automatisation email) — pixel d'ouverture indicatif.
+    `open_tracking_token` est un token opaque non séquentiel (voir
+    EmailSend.open_tracking_token) ; jamais généré pour un envoi is_test."""
+    path = reverse("track_email_open", kwargs={"token": open_tracking_token})
+    return f"{_base_url(request)}{path}"

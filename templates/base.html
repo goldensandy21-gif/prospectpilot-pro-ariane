@@ -17,6 +17,7 @@
 {% url 'prospect_import' as u_prospect_import %}
 {% url 'prospect_list' as u_prospect_list %}
 {% url 'campaign_list' as u_campaign_list %}
+{% url 'email_planning' as u_email_planning %}
 {% url 'conversions_revenue' as u_conversions_revenue %}
 <header class="app-header">
   <nav class="navbar navbar-expand-lg app-navbar">
@@ -40,7 +41,13 @@
             </ul>
           </li>
           <li class="nav-item"><a class="nav-link {% if request.path == u_prospect_list %}active{% endif %}" href="{{ u_prospect_list }}">Prospects</a></li>
-          <li class="nav-item"><a class="nav-link {% if request.path == u_campaign_list %}active{% endif %}" href="{{ u_campaign_list }}">Campagnes</a></li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle {% if request.path == u_campaign_list or request.path == u_email_planning %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Campagnes</a>
+            <ul class="dropdown-menu">
+              <li><a class="dropdown-item" href="{{ u_campaign_list }}">Toutes les campagnes</a></li>
+              <li><a class="dropdown-item" href="{{ u_email_planning }}">Planning e-mail</a></li>
+            </ul>
+          </li>
           <li class="nav-item"><a class="nav-link {% if request.path == u_conversions_revenue %}active{% endif %}" href="{{ u_conversions_revenue }}">Résultats</a></li>
           <li class="nav-item dropdown">
             <a class="nav-link dropdown-toggle {% if request.path == u_search_console or request.path == u_email_settings or request.path == u_prospect_import %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Réglages</a>

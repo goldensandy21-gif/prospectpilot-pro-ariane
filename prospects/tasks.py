@@ -671,3 +671,27 @@ def run_scheduled_search_preset_task(preset_id):
     preset.save(update_fields=["last_run_at"])
     run_company_search_run_task.delay(search_run.pk)
     return search_run.pk
+
+
+@shared_task
+def run_email_planning_scheduler_task():
+    """Section F — automatisation email planifiée. Idempotent : chaque appel
+    ne relit que l'état réel en base (aucun état en mémoire entre deux
+    exécutions), donc un redémarrage ou un double déclenchement ne peut
+    jamais produire un double envoi — la garantie vient de
+    campaign_sequencing.advance_campaign_prospect (verrouillage
+    select_for_update + current_step avancé uniquement après succès)."""
+    from .services.email_automation import run_planning_scheduler
+
+    return run_planning_scheduler()
+
+
+@shared_task
+def poll_inbound_replies_task():
+    """Section J — lecture seule de la boîte de réponse configurée par
+    variables d'environnement (IMAP_HOST/IMAP_USER/IMAP_PASSWORD). Ne répond
+    jamais automatiquement. Dormant tant que ces variables ne sont pas
+    configurées (voir services/inbound_replies.py)."""
+    from .services.inbound_replies import poll_inbound_replies
+
+    return poll_inbound_replies()
