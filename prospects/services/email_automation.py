@@ -263,11 +263,25 @@ def validate_planned_content(planned, user):
 
 
 def freeze_planned_content(campaign_prospect, email_step, user, scheduled_date, test_recipient=""):
-    """Combinateur de convenance : prépare, envoie le test réel désormais
-    obligatoire (section 4), PUIS valide — en un seul appel (utilisé par les
-    tests et par tout appelant qui n'a pas besoin de séparer les 3 étapes
-    humaines). Le test part vers `test_recipient`, ou à défaut l'adresse
-    d'expédition du produit (adresse interne, jamais un vrai prospect)."""
+    """RÉSERVÉ AUX TESTS AUTOMATISÉS (section J, Round D — audité : à ce jour
+    aucun appelant en dehors de prospects/tests/*.py, `grep -rn
+    freeze_planned_content prospects/` en fait foi). Combinateur de
+    convenance qui prépare, envoie le test réel désormais obligatoire
+    (section 4), PUIS valide — en un seul appel synchrone, SANS action
+    humaine séparée entre les 3 étapes.
+
+    AUCUN CHEMIN PRODUCTION (vue, tâche Celery, commande de management) ne
+    doit jamais appeler cette fonction : le workflow réel, humain, en
+    production reste strictement « Préparer » (prepare_planned_content) ->
+    « Envoyer les tests » (send_test_email, un clic explicite) -> « Valider
+    et programmer » (validate_planned_content, un second clic explicite,
+    séparé et délibéré). Les vues de production (acquisition_views.py::
+    email_planning_prepare_week/email_planning_send_tests/
+    email_planning_validate_and_schedule) appellent chacune directement les
+    fonctions ci-dessus, jamais ce combinateur.
+
+    Le test part vers `test_recipient`, ou à défaut l'adresse d'expédition
+    du produit (adresse interne, jamais un vrai prospect)."""
     planned = prepare_planned_content(campaign_prospect, email_step, scheduled_date)
     recipient = test_recipient or campaign_prospect.campaign.product.sender_email or "contact-predict@predictneed-ia.com"
     send_test_email(campaign_prospect, planned, recipient)
@@ -275,6 +289,30 @@ def freeze_planned_content(campaign_prospect, email_step, user, scheduled_date, 
     validate_planned_content(planned, user)
     planned.refresh_from_db()
     return planned
+
+
+def promote_campaign_after_validation(campaign, user):
+    """Section A (Round D, verrous production) — après une action « Valider
+    et programmer » ayant réellement validé au moins un PlannedEmailContent
+    pour `campaign` dans ce lot, rend la campagne réellement envoyable par
+    le scheduler.
+
+    Pose TOUJOURS un nouvel horodatage (`timezone.now()`) et un nouvel
+    approbateur — jamais l'ancien `validated_at` d'avant adoption (une
+    campagne adoptée est explicitement remise à draft/validated_at=None
+    précisément pour empêcher que son ancienne approbation manuelle ne
+    compte ici comme une validation Planning). Ne rétrograde jamais une
+    campagne déjà "active" vers "ready". N'est appelée QUE pour une
+    campagne ayant au moins un contenu réellement validé dans ce lot — si
+    aucun contenu n'a été approuvé, cette fonction n'est simplement jamais
+    appelée et la campagne reste non-sendable (is_sendable exige toujours
+    status in (ready, active) ET validated_at renseigné)."""
+    campaign.validated_at = timezone.now()
+    campaign.validated_by = user
+    if campaign.status != "active":
+        campaign.status = "ready"
+    campaign.save(update_fields=["status", "validated_at", "validated_by", "updated_at"])
+    return campaign
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +398,21 @@ def normalize_planning_sequence(sequence):
                 step=step, name=name, cta_type="simulator",
                 subject_template=f"{{{{ company_name }}}} — {name.lower()}",
             )
+
+    # Section F (Round D) : une séquence legacy clonée peut contenir des
+    # étapes au-delà de J14 (order 5, 6...) — jamais laissées actives dans
+    # la copie Planning, sans quoi le scheduler continuerait au-delà de la
+    # 4e étape. JAMAIS supprimées (elles appartiennent à un clone dédié,
+    # aucune autre campagne n'y touche) ni modifiées sur l'originale
+    # (celle-ci n'est jamais passée à cette fonction, voir
+    # adopt_campaign_into_planning). Le reste du moteur filtre déjà partout
+    # sur active=True (_next_step, cumulative_delay_days, render_live_content
+    # via email_step.variants.filter(active=True)...), donc une étape
+    # désactivée ici n'est plus jamais exécutée par le scheduler.
+    for extra_step in sequence.steps.exclude(order__in=[1, 2, 3, 4]).filter(active=True):
+        extra_step.active = False
+        extra_step.save(update_fields=["active"])
+
     return sequence
 
 
@@ -493,7 +546,13 @@ def build_week_plan(now=None):
     today = local_today(now, settings_row)
     start = today if today.weekday() < 5 else next_business_day(today)
 
-    campaigns = Campaign.objects.filter(planning_managed=True).select_related("sequence")
+    # Section I (Round D) : une campagne en pause/annulée/terminée ne doit
+    # jamais se voir préparer de nouveau contenu — brouillon/prête/active
+    # restent autorisées (une campagne "draft" peut légitimement préparer/
+    # tester avant sa toute première validation).
+    campaigns = Campaign.objects.filter(planning_managed=True).exclude(
+        status__in=["paused", "cancelled", "completed"],
+    ).select_related("sequence")
 
     remaining_followups = _due_followups(campaigns, start)
     remaining_new = _pending_new_contacts(campaigns)

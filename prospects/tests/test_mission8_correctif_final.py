@@ -164,7 +164,8 @@ class FourDistinctEmailBodiesTests(TestCase):
 
     def test_j8_uses_a_new_hedged_angle_not_j0s_headline(self):
         _subject, html_j8, text_j8 = self._render(self.steps[2])
-        self.assertIn("peut parfois indiquer", text_j8 + html_j8)
+        self.assertIn("point de friction possible", text_j8 + html_j8)
+        self.assertIn("sans certitude", text_j8 + html_j8)
         self.assertNotIn("Comportements observés", html_j8)
 
     def test_j14_is_short_and_explicitly_states_it_is_the_last_message(self):

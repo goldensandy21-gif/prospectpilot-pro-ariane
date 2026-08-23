@@ -35,6 +35,7 @@ urlpatterns = [
     path("api/email/prospects/<int:pk>/send/",views.email_api_send,name="api_email_send"),
     path("api/sms/status/",views.sms_api_status,name="api_sms_status"),
     path("unsubscribe/<uuid:token>/",views.unsubscribe,name="unsubscribe"),
+    path("test-preview/unsubscribe/",acquisition_views.test_unsubscribe_preview,name="test_unsubscribe_preview"),
     path("exports/csv/",views.export_csv,name="export_csv"),
     path("exports/xlsx/",views.export_xlsx,name="export_xlsx"),
     path("responses/",views.response_board,name="response_board"),
@@ -55,6 +56,7 @@ urlpatterns = [
 
     # Automatisation email planifiée — Planning e-mail
     path("campaigns/planning/",acquisition_views.email_planning,name="email_planning"),
+    path("campaigns/planning/prospect/<int:cp_id>/preview/",acquisition_views.email_planning_preview,name="email_planning_preview"),
     path("campaigns/planning/prepare/",acquisition_views.email_planning_prepare_week,name="email_planning_prepare_week"),
     path("campaigns/planning/send-tests/",acquisition_views.email_planning_send_tests,name="email_planning_send_tests"),
     path("campaigns/planning/validate/",acquisition_views.email_planning_validate_and_schedule,name="email_planning_validate_and_schedule"),

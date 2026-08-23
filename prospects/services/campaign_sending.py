@@ -39,7 +39,20 @@ def _domain(email):
 
 def send_campaign_batch(campaign, limit=None):
     """Envoie le prochain lot de la campagne dans les limites configurées.
-    Retourne un résumé {sent, blocked, skipped, errors}."""
+    Retourne un résumé {sent, blocked, skipped, errors}.
+
+    Section B (Round D, verrous production) : refuse IMMÉDIATEMENT une
+    campagne planning_managed=True, même appelée directement en Python hors
+    de toute vue — le seul moteur d'envoi autorisé pour ces campagnes est
+    campaign_sequencing.advance_campaign_prospect (via le scheduler), qui
+    exige un PlannedEmailContent validé (testé, non périmé). Ce garde-fou
+    reste nécessaire même si campaign.is_sendable devient True après une
+    validation Planning (section A) : is_sendable seul ne suffit plus à
+    distinguer les deux moteurs d'envoi."""
+    if campaign.planning_managed:
+        return {"sent": 0, "blocked": 0, "skipped": 0, "errors": [
+            "Campagne pilotée par le Planning e-mail — envoi par lot legacy refusé (utiliser Préparer/Tester/Valider).",
+        ]}
     if not campaign.is_sendable:
         return {"sent": 0, "blocked": 0, "skipped": 0, "errors": ["Campagne non validée."]}
 

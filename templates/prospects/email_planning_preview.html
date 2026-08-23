@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Aperçu Planning | ProspectPilot Pro{% endblock %}
+{% block content %}
+<section class="section-header">
+  <div>
+    <span class="eyebrow">CAMPAGNES · PLANNING E-MAIL</span>
+    <h1>Aperçu — {{ cp.prospect.name }}</h1>
+    <p>Contenu figé (PlannedEmailContent) tel quel — jamais un nouveau rendu live. C'est exactement ce qui a été/sera testé et validé.</p>
+  </div>
+</section>
+<section class="container-fluid px-lg-4 pb-5">
+
+  <div class="cockpit-card mb-3">
+    <div class="table-responsive">
+      <table class="table commercial-table align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Étape</th><th>Sujet</th><th>Date prévue</th><th>Testé</th><th>Validé</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr {% if selected and row.step.pk == selected.step.pk %}class="table-active"{% endif %}>
+              <td>{{ row.step.name|default:"—" }}</td>
+              <td>{{ row.planned.subject|default:"— (pas encore préparé)"|truncatechars:60 }}</td>
+              <td>{{ row.planned.scheduled_date|date:"d/m/Y"|default:"—" }}</td>
+              <td>
+                {% if row.tested %}<span class="status-pill status-success">Testé</span>
+                {% elif row.planned %}<span class="status-pill status-warning">Test requis</span>
+                {% else %}—{% endif %}
+              </td>
+              <td>
+                {% if row.validated %}<span class="status-pill status-success">Validé</span>
+                {% elif row.planned %}<span class="status-pill status-warning">{{ row.planned.get_status_display }}</span>
+                {% else %}—{% endif %}
+              </td>
+              <td>
+                {% if row.planned %}
+                  <a class="btn btn-sm btn-outline-dark" href="?step={{ row.step.pk }}">Aperçu</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="text-muted">Aucune séquence configurée pour ce prospect.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if selected and selected.planned %}
+    <div class="cockpit-card">
+      <h2 class="h6">{{ selected.step.name }} — {{ selected.planned.subject }}</h2>
+      <p class="text-muted small">
+        Statut : {{ selected.planned.get_status_display }}
+        {% if selected.tested %} · testé le {{ selected.planned.test_sent_at|date:"d/m/Y H:i" }}{% endif %}
+      </p>
+      <ul class="nav nav-tabs" id="previewTabs" role="tablist">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#preview-html" type="button">HTML</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#preview-text" type="button">Texte</button></li>
+      </ul>
+      <div class="tab-content border border-top-0 p-3">
+        <div class="tab-pane fade show active" id="preview-html">
+          <iframe title="Aperçu HTML" style="width:100%;min-height:600px;border:1px solid #e2e6ed;border-radius:8px;" srcdoc="{{ selected.planned.html_body|escape }}"></iframe>
+        </div>
+        <div class="tab-pane fade" id="preview-text">
+          <pre style="white-space:pre-wrap;">{{ selected.planned.text_body }}</pre>
+        </div>
+      </div>
+    </div>
+  {% elif selected %}
+    <div class="empty-state">
+      <div class="empty-state-title">Pas encore préparé.</div>
+      <p>Utilisez « Préparer la semaine » depuis Planning e-mail pour générer ce contenu.</p>
+    </div>
+  {% endif %}
+
+  <a class="btn btn-outline-dark mt-3" href="{% url 'email_planning' %}">← Retour au Planning e-mail</a>
+</section>
+{% endblock %}

@@ -59,6 +59,32 @@ def resolve_target_url(campaign_prospect, cta_type):
     return f"{target}{separator}{urlencode(params)}"
 
 
+def resolve_target_url_for_test(campaign_prospect, cta_type):
+    """Section C (Round D, verrous production) — CTA test-safe : va
+    DIRECTEMENT vers la destination PredictNeed, SANS passer par le
+    tracking ProspectPilot (jamais `campaign_click`, jamais le
+    `tracking_token` réel du prospect dans l'URL). Un clic sur ce lien
+    depuis un e-mail de test ne peut donc jamais créer d'EngagementEvent ni
+    muter le CampaignProspect réel."""
+    product = campaign_prospect.campaign.product
+    getter = TARGET_URLS.get(cta_type, TARGET_URLS["product"])
+    target = getter(product) or product.website_url or ""
+    if not target:
+        return ""
+    params = build_utm_params(campaign_prospect.campaign)
+    separator = "&" if "?" in target else "?"
+    return f"{target}{separator}{urlencode(params)}"
+
+
+def build_test_unsubscribe_preview_url(request=None):
+    """Section C — lien « Se désabonner » neutralisé pour un e-mail de test
+    (`is_test=True`) : aucun token, aucune correspondance avec un Prospect
+    réel — la page affichée n'effectue jamais la désinscription/suppression
+    réelle (voir acquisition_views.test_unsubscribe_preview)."""
+    path = reverse("test_unsubscribe_preview")
+    return f"{_base_url(request)}{path}"
+
+
 def build_privacy_url(prospect, request=None):
     path = reverse("prospect_privacy", kwargs={"token": prospect.unsubscribe_token})
     return f"{_base_url(request)}{path}"

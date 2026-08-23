@@ -18,7 +18,15 @@ from ..models import ContactLog, EmailSend, EngagementEvent
 from .compliance_footer import render_compliance_footer_html, render_compliance_footer_text
 from .email_identity import format_from_header, get_sender_identity
 from .suppression import is_suppressed
-from .tracking import build_open_tracking_url, build_privacy_url, build_tracking_url, build_unsubscribe_url, resolve_target_url
+from .tracking import (
+    build_open_tracking_url,
+    build_privacy_url,
+    build_test_unsubscribe_preview_url,
+    build_tracking_url,
+    build_unsubscribe_url,
+    resolve_target_url,
+    resolve_target_url_for_test,
+)
 
 DEFAULT_CTA_LABELS = {
     "simulator": "Tester le simulateur",
@@ -75,7 +83,16 @@ def _observation_line(agent_brief):
     return top.get("label", "")
 
 
-def build_predictneed_context(campaign_prospect, email_step=None, email_variant=None, request=None):
+def _secondary_signal_line(agent_brief):
+    """Section H (Round D) : le VRAI deuxième signal, distinct de celui déjà
+    utilisé en J0 (_observation_line -> relevant_signals[0]). Chaîne vide si
+    l'AgentBrief n'en contient pas au moins deux — jamais de fabrication."""
+    if not agent_brief or not agent_brief.relevant_signals or len(agent_brief.relevant_signals) < 2:
+        return ""
+    return agent_brief.relevant_signals[1].get("label", "")
+
+
+def build_predictneed_context(campaign_prospect, email_step=None, email_variant=None, request=None, is_test=False):
     prospect = campaign_prospect.prospect
     campaign = campaign_prospect.campaign
     product = campaign.product
@@ -92,6 +109,7 @@ def build_predictneed_context(campaign_prospect, email_step=None, email_variant=
         "first_name": first_name,
         "observation": _observation_line(agent_brief),
         "detected_signal": _observation_line(agent_brief),
+        "secondary_signal": _secondary_signal_line(agent_brief),
         "detected_problem": agent_brief.detected_need if agent_brief else "",
         "product_name": product.name,
         "product_url": product.website_url,
@@ -99,10 +117,23 @@ def build_predictneed_context(campaign_prospect, email_step=None, email_variant=
         "signup_url": product.signup_url,
         "value_proposition": product.short_value_proposition,
     }
-    ctx["cta_url"] = build_tracking_url(campaign_prospect, cta_type=cta_type, email_step=email_step, email_variant=email_variant, request=request)
-    ctx["cta_target_url"] = resolve_target_url(campaign_prospect, cta_type)
+    # Section C (Round D, verrous production) : un e-mail is_test=True ne
+    # doit jamais embarquer de lien capable de muter le vrai prospect — ni
+    # le tracking_token réel (`/t/<token>/`), ni le vrai lien de
+    # désabonnement (`/unsubscribe/<token>/`). Le contenu VISIBLE reste
+    # identique (même labels, mêmes conditions d'affichage) ; seules les
+    # URLs changent.
+    if is_test:
+        ctx["cta_url"] = resolve_target_url_for_test(campaign_prospect, cta_type)
+        ctx["cta_target_url"] = ctx["cta_url"]
+        ctx["unsubscribe_url"] = build_test_unsubscribe_preview_url(request=request)
+    else:
+        ctx["cta_url"] = build_tracking_url(campaign_prospect, cta_type=cta_type, email_step=email_step, email_variant=email_variant, request=request)
+        ctx["cta_target_url"] = resolve_target_url(campaign_prospect, cta_type)
+        ctx["unsubscribe_url"] = build_unsubscribe_url(prospect, request=request)
     ctx["cta_label"] = (email_variant.cta_label_override if email_variant else "") or DEFAULT_CTA_LABELS.get(cta_type, "En savoir plus")
-    ctx["unsubscribe_url"] = build_unsubscribe_url(prospect, request=request)
+    # La page de confidentialité est purement en lecture (aucune mutation) —
+    # elle peut donc rester la vraie page, y compris pour un test.
     ctx["privacy_url"] = build_privacy_url(prospect, request=request)
     return ctx
 
@@ -270,26 +301,33 @@ def _body_blocks_j4_html(ctx):
     return recall_html + _cta_button_html(ctx) + _reply_line_html()
 
 
+_FRICTION_HEDGE_SENTENCE = "Cela peut correspondre à un point de friction possible dans le parcours, sans certitude."
+
+
 def _body_blocks_j8_html(ctx):
-    """J8 — nouvel angle (section 6) : un signal réel différent de celui du
-    J0, toujours au conditionnel/hedged (jamais de certitude affirmée sur
-    l'intention du visiteur), CTA discret plutôt qu'un gros bouton."""
-    angle_parts = []
-    if ctx["detected_signal"]:
-        angle_parts.append(
-            f'Un autre signal observé chez {escape(ctx["company_name"])} : {escape(ctx["detected_signal"])}.'
+    """J8 — nouvel angle (section 6, affiné section H Round D) : jamais de
+    concaténation en milieu de phrase avec `detected_problem` (peut être une
+    phrase complète autonome, pas un fragment à mettre en minuscule au
+    milieu d'une autre phrase). Utilise le VRAI deuxième signal
+    (`secondary_signal`) s'il existe — jamais le même signal que le J0
+    présenté comme « un autre ». À défaut d'un second signal réel, présente
+    un autre angle de lecture du signal déjà évoqué, sans prétendre qu'il
+    s'agit d'un signal différent. Toujours hedged (« peut correspondre »,
+    « sans certitude »)."""
+    parts = []
+    if ctx["secondary_signal"]:
+        parts.append(
+            f'<p style="margin:0 0 12px 0;font-size:15px;line-height:1.65;color:{INK};">'
+            f'Un autre signal observé chez {escape(ctx["company_name"])} : {escape(ctx["secondary_signal"])}.</p>'
         )
-    if ctx["detected_problem"]:
-        angle_parts.append(
-            f'Cela peut parfois indiquer {escape(ctx["detected_problem"].lower())}, sans certitude — '
-            "un point de friction possible dans le parcours de conversion."
+        parts.append(f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:{INK};">{_FRICTION_HEDGE_SENTENCE}</p>')
+    elif ctx["detected_problem"]:
+        parts.append(
+            f'<p style="margin:0 0 12px 0;font-size:15px;line-height:1.65;color:{INK};">'
+            f'Un autre angle à vérifier : {escape(ctx["detected_problem"])}</p>'
         )
-    angle_html = ""
-    if angle_parts:
-        angle_html = (
-            f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:{INK};">{" ".join(angle_parts)}</p>'
-        )
-    return angle_html + _cta_link_html(ctx) + _reply_line_html()
+        parts.append(f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:{INK};">{_FRICTION_HEDGE_SENTENCE}</p>')
+    return "".join(parts) + _cta_link_html(ctx) + _reply_line_html()
 
 
 def _body_blocks_j14_html(ctx):
@@ -382,14 +420,12 @@ def _body_lines_j4(ctx):
 
 def _body_lines_j8(ctx):
     lines = []
-    if ctx["detected_signal"]:
-        lines += [f"Un autre signal observé chez {ctx['company_name']} : {ctx['detected_signal']}.", ""]
-    if ctx["detected_problem"]:
-        lines += [
-            f"Cela peut parfois indiquer {ctx['detected_problem'].lower()}, sans certitude — "
-            "un point de friction possible dans le parcours de conversion.",
-            "",
-        ]
+    if ctx["secondary_signal"]:
+        lines += [f"Un autre signal observé chez {ctx['company_name']} : {ctx['secondary_signal']}.", ""]
+        lines += [_FRICTION_HEDGE_SENTENCE, ""]
+    elif ctx["detected_problem"]:
+        lines += [f"Un autre angle à vérifier : {ctx['detected_problem']}", ""]
+        lines += [_FRICTION_HEDGE_SENTENCE, ""]
     if ctx["cta_target_url"]:
         lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
     lines.append("Vous pouvez aussi simplement répondre à cet e-mail.")
@@ -445,14 +481,46 @@ def inject_open_pixel(html_body, open_tracking_token, request=None):
     return html_body + pixel_html
 
 
-def render_predictneed_email(campaign_prospect, email_step=None, email_variant=None, request=None, open_tracking_token=None):
+def _test_safe_link_replacements(campaign_prospect, email_step, request=None):
+    """Section C (Round D) : recalcule les VRAIS liens (mêmes fonctions,
+    mêmes paramètres que lors du rendu figé => URL identique octet pour
+    octet) afin de pouvoir les substituer par leurs équivalents test-safe
+    juste avant un envoi is_test=True, SANS jamais re-rendre le texte
+    visible lui-même (le contenu figé/testé/validé reste octet pour octet
+    identique, seuls les liens techniques changent)."""
+    prospect = campaign_prospect.prospect
+    variant = email_step.variants.filter(active=True).first() if email_step else None
+    cta_type = variant.cta_type if variant else "simulator"
+    real_cta_url = build_tracking_url(campaign_prospect, cta_type=cta_type, email_step=email_step, email_variant=variant, request=request)
+    real_unsubscribe_url = build_unsubscribe_url(prospect, request=request)
+    test_cta_url = resolve_target_url_for_test(campaign_prospect, cta_type)
+    test_unsubscribe_url = build_test_unsubscribe_preview_url(request=request)
+    return {real_cta_url: test_cta_url, real_unsubscribe_url: test_unsubscribe_url}
+
+
+def neutralize_test_links(html_body, text_body, campaign_prospect, email_step, request=None):
+    """Applique `_test_safe_link_replacements` au contenu FIGÉ (frozen_content)
+    avant un envoi is_test=True : le contenu figé/validé a été rendu une
+    seule fois avec les VRAIS liens (nécessaire pour l'envoi commercial), un
+    test ne doit jamais les recevoir tels quels. Remplace la forme HTML
+    échappée (attributs href) et la forme brute (texte)."""
+    replacements = _test_safe_link_replacements(campaign_prospect, email_step, request=request)
+    for real_url, test_url in replacements.items():
+        if not real_url:
+            continue
+        html_body = html_body.replace(escape(real_url), escape(test_url)).replace(real_url, test_url)
+        text_body = text_body.replace(real_url, test_url)
+    return html_body, text_body
+
+
+def render_predictneed_email(campaign_prospect, email_step=None, email_variant=None, request=None, open_tracking_token=None, is_test=False):
     prospect = campaign_prospect.prospect
     product = campaign_prospect.campaign.product
     compliance_profile = getattr(product, "compliance_profile", None)
     email = prospect.public_email or ""
     step_order = email_step.order if email_step else 1
 
-    ctx = build_predictneed_context(campaign_prospect, email_step=email_step, email_variant=email_variant, request=request)
+    ctx = build_predictneed_context(campaign_prospect, email_step=email_step, email_variant=email_variant, request=request, is_test=is_test)
     subject = render_predictneed_subject(email_variant, ctx)
     open_tracking_url = build_open_tracking_url(open_tracking_token, request=request) if open_tracking_token else None
     html = render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=open_tracking_url, step_order=step_order)
@@ -493,7 +561,11 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
         subject = frozen_content["subject"]
         text = frozen_content["text_body"]
         if is_test:
-            html = frozen_content["html_body"]
+            # Section C (Round D, verrous production) : le contenu figé a
+            # été rendu une seule fois avec les VRAIS liens (nécessaire pour
+            # l'envoi commercial) — un test ne doit jamais les recevoir tels
+            # quels. Le texte visible reste octet pour octet identique.
+            html, text = neutralize_test_links(frozen_content["html_body"], text, campaign_prospect, email_step, request=request)
             open_tracking_token = ""
         else:
             open_tracking_token = secrets.token_urlsafe(32)
@@ -501,10 +573,13 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
     else:
         # Pixel d'ouverture (section H) : jamais pour un envoi de test, pour
         # ne polluer aucune donnée commerciale ; token opaque non séquentiel.
+        # Section C (Round D) : is_test=True fait rendre directement des
+        # liens test-safe (build_predictneed_context), pas de post-traitement
+        # nécessaire ici.
         open_tracking_token = "" if is_test else secrets.token_urlsafe(32)
         subject, html, text = render_predictneed_email(
             campaign_prospect, email_step, email_variant, request,
-            open_tracking_token=open_tracking_token or None,
+            open_tracking_token=open_tracking_token or None, is_test=is_test,
         )
 
     identity = get_sender_identity(product=product, campaign=campaign)
@@ -544,10 +619,21 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
         "List-Unsubscribe": f"<{build_unsubscribe_url(prospect, request)}>",
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
-    previous_send = (
-        EmailSend.objects.filter(campaign_prospect=campaign_prospect, status="sent")
-        .exclude(pk=record.pk).order_by("created_at").first()
-    )
+    # Section D (Round D, verrous production) : le threading (In-Reply-To/
+    # References) ne doit JAMAIS référencer un envoi de test — un test J0
+    # ne doit jamais faire croire au vrai J0 qu'il répond à quelque chose,
+    # et un Message-ID de test ne doit JAMAIS apparaître dans les en-têtes
+    # d'un email commercial. On ne construit donc ce threading que pour un
+    # envoi commercial réel (`not is_test`), et on ne considère QUE les
+    # envois commerciaux réussis (`is_test=False, status="sent"`) — le plus
+    # RÉCENT (`-created_at`), pas le plus ancien : J8 doit répondre au vrai
+    # J4, jamais toujours au vrai J0.
+    previous_send = None
+    if not is_test:
+        previous_send = (
+            EmailSend.objects.filter(campaign_prospect=campaign_prospect, status="sent", is_test=False)
+            .exclude(pk=record.pk).order_by("-created_at").first()
+        )
     if previous_send and previous_send.message_id:
         headers["In-Reply-To"] = previous_send.message_id
         headers["References"] = (previous_send.references + " " + previous_send.message_id).strip()

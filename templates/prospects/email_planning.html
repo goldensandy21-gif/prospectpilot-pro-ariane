@@ -71,7 +71,7 @@
                 <td>{% if row.clicked %}Clic détecté{% else %}—{% endif %}</td>
                 <td>{% if row.replied %}A répondu{% else %}—{% endif %}</td>
                 <td class="d-flex gap-1">
-                  <a class="btn btn-sm btn-outline-dark" href="{% url 'campaign_preview' row.cp.campaign_id %}?cp={{ row.cp.pk }}">Aperçu</a>
+                  <a class="btn btn-sm btn-outline-dark" href="{% url 'email_planning_preview' row.cp.pk %}">Aperçu</a>
                   {% if row.step %}
                   <form method="post" action="{% url 'email_planning_stop' row.cp.pk %}" onsubmit="return confirm('Arrêter cette séquence ?');">{% csrf_token %}
                     <button class="btn btn-sm btn-outline-danger">Arrêter</button>

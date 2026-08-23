@@ -66,18 +66,28 @@ def process_inbound_message(msg, message_identity=None):
     logique réseau ici, entièrement testable avec des messages construits
     à la main.
 
-    `message_identity` (section 7, audit correctif final) : quand fourni
-    (cas réel, depuis poll_inbound_replies), la création de l'EngagementEvent
-    devient elle-même le verrou d'idempotence ATOMIQUE — via
-    EngagementEvent.idempotency_key, contrainte unique en base — en plus du
-    registre ProcessedInboundMessage. Ceinture ET bretelles : même si un
-    crash survient entre la « réclamation » du message côté registre et la
-    fin de son traitement (forçant une reprise sur le même message), ce
-    message ne peut jamais produire un second ContactLog/EngagementEvent —
-    la création reste conditionnée à get_or_create() sur idempotency_key,
-    correct même si le registre applicatif était dans un état incohérent.
+    Section E (Round D, verrous production) — transaction atomique réelle :
+    la réclamation de l'idempotency key, la mise à jour de Prospect, la
+    création du ContactLog(outcome="replied") et de l'EngagementEvent sont
+    désormais UNE seule unité `transaction.atomic()`. Un crash pendant cette
+    fonction (process tué, connexion DB coupée) fait donc rollback de tout
+    le bloc — aucun état partiel neuf ne peut plus apparaître à partir de
+    maintenant.
+
+    Ceinture ET bretelles pour un état partiel PRÉEXISTANT (avant ce
+    correctif, ou tout incident résiduel) : si l'EngagementEvent existe déjà
+    (idempotency_key) mais que SON ContactLog n'a jamais été créé (tracé via
+    `metadata["contact_log_id"]`, jamais un simple "un ContactLog replied
+    existe quelque part" — un prospect peut légitimement répondre plusieurs
+    fois), la reprise RÉPARE l'état (crée le ContactLog manquant, met à jour
+    Prospect) au lieu de retourner immédiatement `already_recorded`.
+
+    `message_identity` (section 7, correctif final) : quand fourni (cas
+    réel, depuis poll_inbound_replies), la création de l'EngagementEvent est
+    le verrou d'idempotence ATOMIQUE — via EngagementEvent.idempotency_key,
+    contrainte unique en base — en plus du registre ProcessedInboundMessage.
     Sans `message_identity` (appel direct historique, tests unitaires),
-    comportement inchangé : toujours créé."""
+    comportement inchangé : toujours créé, toujours (ré)traité."""
     in_reply_to = msg.get("In-Reply-To", "")
     references = msg.get("References", "")
     from_header = msg.get("From", "")
@@ -96,37 +106,41 @@ def process_inbound_message(msg, message_identity=None):
         "campaign_prospect": record.campaign_prospect, "prospect": prospect,
         "campaign": record.campaign_prospect.campaign if record.campaign_prospect else None,
         "event_type": "email_replied", "source": "prospectpilot",
-        "metadata": {"email_send_id": record.pk},
+        "metadata": {"email_send_id": record.pk, "contact_log_id": None},
     }
-    if message_identity:
-        _event, created = EngagementEvent.objects.get_or_create(
-            idempotency_key=f"inbound-reply:{message_identity}", defaults=event_defaults,
-        )
-        if not created:
-            return {"action": "already_recorded", "prospect_id": prospect.pk, "email_send_id": record.pk}
-    else:
-        EngagementEvent.objects.create(**event_defaults)
 
-    prospect.last_replied_at = now
-    if prospect.status != "do_not_contact":
-        prospect.status = "replied"
-    prospect.save(update_fields=["last_replied_at", "status"])
+    with transaction.atomic():
+        if message_identity:
+            event, created = EngagementEvent.objects.select_for_update().get_or_create(
+                idempotency_key=f"inbound-reply:{message_identity}", defaults=event_defaults,
+            )
+        else:
+            event, created = EngagementEvent.objects.create(**event_defaults), True
 
-    # Déclenche l'arrêt de séquence existant (stop_on_reply déjà lu depuis
-    # ContactLog.outcome="replied" par campaign_sequencing.py::_stop_reason)
-    # — aucune deuxième logique d'arrêt créée ici. Créé SEULEMENT dans la
-    # branche où l'EngagementEvent vient d'être créé (ci-dessus) : une
-    # reprise après crash sur un message déjà réellement traité ne
-    # duplique donc jamais ce ContactLog.
-    ContactLog.objects.create(
-        prospect=prospect, channel="email",
-        subject=subject or "(sans objet)",
-        message="Réponse reçue (détection IMAP automatique).",
-        outcome="replied",
-        campaign_prospect=record.campaign_prospect,
-    )
+        if created or not event.metadata.get("contact_log_id"):
+            prospect.last_replied_at = now
+            if prospect.status != "do_not_contact":
+                prospect.status = "replied"
+            prospect.save(update_fields=["last_replied_at", "status"])
 
-    return {"action": "matched", "prospect_id": prospect.pk, "email_send_id": record.pk}
+            # Déclenche l'arrêt de séquence existant (stop_on_reply déjà lu
+            # depuis ContactLog.outcome="replied" par
+            # campaign_sequencing.py::_stop_reason) — aucune deuxième
+            # logique d'arrêt créée ici.
+            contact_log = ContactLog.objects.create(
+                prospect=prospect, channel="email",
+                subject=subject or "(sans objet)",
+                message="Réponse reçue (détection IMAP automatique).",
+                outcome="replied",
+                campaign_prospect=record.campaign_prospect,
+            )
+            event.metadata = {**event.metadata, "contact_log_id": contact_log.pk}
+            event.save(update_fields=["metadata"])
+            action = "matched" if created else "repaired"
+        else:
+            action = "already_recorded"
+
+    return {"action": action, "prospect_id": prospect.pk, "email_send_id": record.pk}
 
 
 def _message_identity(msg):

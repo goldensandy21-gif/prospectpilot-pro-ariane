@@ -442,18 +442,24 @@ class SingleRenderWorkflowTests(TestCase):
         self.assertEqual(commercial_result["action"], "email")
         commercial_record = EmailSend.objects.filter(campaign_prospect=self.member, is_test=False).latest("id")
 
-        # Sujet/texte strictement identiques entre test et commercial, eux-
-        # mêmes identiques à ce qui a été préparé — jamais régénérés. Le HTML
-        # commercial est le HTML de test AVEC le pixel d'ouverture en plus
+        # Sujet strictement identique entre test et commercial, lui-même
+        # identique à ce qui a été préparé — jamais régénéré. Le HTML
+        # commercial est le HTML préparé AVEC le pixel d'ouverture en plus
         # (section 5 : jamais de pixel dans le test, injecté seulement au
-        # moment du vrai envoi).
-        from prospects.services.predictneed_email import inject_open_pixel
+        # moment du vrai envoi). Les liens diffèrent en revanche entre test
+        # et commercial (section C, Round D) : le test ne doit jamais
+        # recevoir le vrai tracking_token ni le vrai lien de désabonnement,
+        # seul le contenu VISIBLE reste identique.
+        from prospects.services.predictneed_email import inject_open_pixel, neutralize_test_links
+        expected_test_html, expected_test_text = neutralize_test_links(prepared_html, prepared_text, self.member, self.step1)
         self.assertEqual(test_record.subject.removeprefix("[TEST] "), commercial_record.subject)
-        self.assertEqual(test_record.text_body, commercial_record.text_body)
-        self.assertEqual(test_record.html_body, prepared_html)
+        self.assertEqual(test_record.html_body, expected_test_html)
+        self.assertEqual(test_record.text_body, expected_test_text)
         self.assertEqual(commercial_record.html_body, inject_open_pixel(prepared_html, commercial_record.open_tracking_token))
         self.assertEqual(commercial_record.subject, prepared_subject)
         self.assertEqual(commercial_record.text_body, prepared_text)
+        self.assertNotIn(f"/t/{self.member.tracking_token}/", test_record.html_body)
+        self.assertIn(f"/t/{self.member.tracking_token}/", commercial_record.html_body)
 
     def test_validate_never_rewrites_the_prepared_content(self):
         planned = prepare_planned_content(self.member, self.step1, timezone.now().date())

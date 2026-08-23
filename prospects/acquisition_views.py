@@ -128,6 +128,14 @@ def prospect_privacy(request, token):
     return render(request, "prospects/prospect_privacy.html", context)
 
 
+def test_unsubscribe_preview(request):
+    """Section C (Round D, verrous production) — cible du lien « Se
+    désabonner » d'un e-mail is_test=True. Aucun token, aucun Prospect
+    résolu, AUCUNE mutation (jamais de Suppression, jamais de statut
+    do_not_contact) : purement une page d'explication statique."""
+    return render(request, "prospects/test_unsubscribe_preview.html")
+
+
 # ---------------------------------------------------------------------------
 # ETAPE 4/30 — recherche « Acquisition PredictNeed IA »
 # ---------------------------------------------------------------------------
@@ -492,6 +500,14 @@ def campaign_preview(request, pk):
 @login_required
 def campaign_validate(request, pk):
     campaign = get_object_or_404(Campaign, pk=pk)
+    # Section B (Round D, verrous production) : une campagne pilotée par le
+    # Planning e-mail ne peut JAMAIS être validée par cet ancien flux — sa
+    # seule voie de validation est « Valider et programmer » (Planning),
+    # qui exige un test réussi sur chaque contenu (voir
+    # email_planning_validate_and_schedule/promote_campaign_after_validation).
+    if campaign.planning_managed:
+        messages.error(request, "Cette campagne est pilotée par le Planning e-mail — validez-la depuis Planning e-mail (Préparer → Tester → Valider).")
+        return redirect("email_planning")
     if request.method == "POST":
         compliance = getattr(campaign.product, "compliance_profile", None)
         if not compliance or not compliance.compliance_ready:
@@ -509,6 +525,13 @@ def campaign_validate(request, pk):
 @login_required
 def campaign_send_batch(request, pk):
     campaign = get_object_or_404(Campaign, pk=pk)
+    # Section B (Round D) : idem campaign_validate — l'envoi par lot legacy
+    # ne doit jamais pouvoir contourner Préparer/Tester/Valider pour une
+    # campagne Planning. Le garde-fou réel et non contournable reste
+    # send_campaign_batch() elle-même (voir campaign_sending.py).
+    if campaign.planning_managed:
+        messages.error(request, "Cette campagne est pilotée par le Planning e-mail — l'envoi se fait depuis Planning e-mail, jamais par l'envoi par lot legacy.")
+        return redirect("email_planning")
     if request.method == "POST":
         if campaign.status == "ready":
             campaign.status = "active"
@@ -523,6 +546,13 @@ def campaign_send_batch(request, pk):
 @login_required
 def campaign_send_test(request, pk):
     campaign = get_object_or_404(Campaign, pk=pk)
+    # Section B (Round D) : le test legacy (rendu live, step 1 uniquement)
+    # ne doit jamais être utilisé pour une campagne Planning — le seul test
+    # valable est « Envoyer les tests » (Planning), qui envoie le contenu
+    # FIGÉ et alimente le garde-fou de validation (tested_content_hash).
+    if campaign.planning_managed:
+        messages.error(request, "Cette campagne est pilotée par le Planning e-mail — utilisez « Envoyer les tests » depuis Planning e-mail.")
+        return redirect("email_planning")
     test_email = request.POST.get("test_email", "").strip()
     member = campaign.campaign_prospects.select_related("prospect").first()
     if request.method == "POST" and test_email and member:
@@ -707,6 +737,49 @@ def email_planning(request):
 
 
 @login_required
+def email_planning_preview(request, cp_id):
+    """Section G (Round D, verrous production) — l'aperçu affiche le
+    CONTENU FIGÉ (PlannedEmailContent.subject/html_body/text_body) tel
+    quel, JAMAIS un nouveau rendu live du renderer : c'est exactement ce
+    que le test a reçu / ce que le scheduler enverra une fois validé.
+    Liste les 4 étapes J0/J4/J8/J14 pour ce prospect, chacune avec son
+    statut réel (préparé/testé/validé)."""
+    cp = get_object_or_404(
+        CampaignProspect.objects.select_related("campaign__sequence", "campaign__product", "prospect"),
+        pk=cp_id, campaign__planning_managed=True,
+    )
+    steps = list(cp.campaign.sequence.steps.filter(active=True).order_by("order")) if cp.campaign.sequence else []
+    planned_by_step = {
+        p.email_step_id: p
+        for p in PlannedEmailContent.objects.filter(campaign_prospect=cp, email_step__in=steps)
+    }
+    rows = []
+    for step in steps:
+        planned = planned_by_step.get(step.pk)
+        if planned:
+            mark_stale_if_changed(planned)
+            planned.refresh_from_db()
+        tested = bool(planned and planned.tested_content_hash and planned.tested_content_hash == planned.content_hash)
+        rows.append({
+            "step": step,
+            "planned": planned,
+            "tested": tested,
+            "validated": bool(planned and planned.status == "validated"),
+        })
+
+    requested_step_id = request.GET.get("step")
+    selected = None
+    if requested_step_id:
+        selected = next((r for r in rows if str(r["step"].pk) == requested_step_id), None)
+    if selected is None:
+        selected = next((r for r in rows if r["planned"]), rows[0] if rows else None)
+
+    return render(request, "prospects/email_planning_preview.html", {
+        "cp": cp, "rows": rows, "selected": selected,
+    })
+
+
+@login_required
 def email_planning_prepare_week(request):
     """« Préparer » — correctif audit, sections 3 et 4.
 
@@ -778,28 +851,44 @@ def email_planning_validate_and_schedule(request):
     qu'un test réussi ait eu lieu sur EXACTEMENT ce contenu, est TOUJOURS
     refusé ici — validate_planned_content() vérifie
     tested_content_hash == content_hash côté serveur, jamais seulement côté
-    interface."""
+    interface.
+
+    Section A (Round D, verrous production) : au-delà du seul
+    PlannedEmailContent, cette action doit rendre la CAMPAGNE réellement
+    envoyable — sans quoi une campagne adoptée (remise à draft/
+    validated_at=None) reste bloquée pour toujours, alors même que son
+    contenu est validé. Chaque campagne ayant reçu au moins une validation
+    réussie dans CE lot est promue par promote_campaign_after_validation()
+    (nouveau validated_at/validated_by, jamais l'ancien). Une campagne sans
+    aucun contenu validé dans ce lot reste inchangée, donc non-sendable."""
     if request.method != "POST":
         return redirect("email_planning")
 
-    from .services.email_automation import validate_planned_content
+    from .services.email_automation import promote_campaign_after_validation, validate_planned_content
 
     campaigns = Campaign.objects.filter(planning_managed=True)
     validated_count = 0
     stale_count = 0
     test_required_count = 0
+    validated_campaign_ids = set()
     for planned in PlannedEmailContent.objects.filter(
         campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
-    ).select_related("campaign_prospect", "email_step"):
+    ).select_related("campaign_prospect__campaign", "email_step"):
         ok, reason = validate_planned_content(planned, request.user)
         if ok:
             validated_count += 1
+            validated_campaign_ids.add(planned.campaign_prospect.campaign_id)
         elif reason == "test_required":
             test_required_count += 1
         else:
             stale_count += 1
 
+    for campaign in Campaign.objects.filter(pk__in=validated_campaign_ids):
+        promote_campaign_after_validation(campaign, request.user)
+
     messages.success(request, f"{validated_count} étape(s) validée(s) et programmée(s) par {request.user.username}.")
+    if validated_campaign_ids:
+        messages.success(request, f"{len(validated_campaign_ids)} campagne(s) désormais envoyable(s) par le scheduler.")
     if stale_count:
         messages.warning(request, f"{stale_count} étape(s) écartée(s) : contenu devenu obsolète depuis la préparation — relance « Préparer » pour ces prospects.")
     if test_required_count:
