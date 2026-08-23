@@ -882,6 +882,18 @@ class PlannedEmailContent(models.Model):
                    "comme périmé (voir is_content_stale) : la version humaine fait foi.",
     )
 
+    editable_body_text = models.TextField(
+        blank=True, default="",
+        help_text="Source éditoriale en texte brut du corps rédactionnel actuel (paragraphes "
+                   "séparés par une ligne vide), hors salutation/CTA/lien technique/ligne de "
+                   "réponse automatique/signature/footer conformité/tracking — ce sont ces "
+                   "éléments-là, et eux seuls, qui restent protégés et jamais éditables. Préremplit "
+                   "le formulaire de modification (workflow live preview) : jamais vide tant qu'un "
+                   "contenu préparé existe. Recalculée intégralement à chaque prepare_planned_content() "
+                   "(le rendu auto redevient la référence) et à chaque apply_manual_edit() (devient "
+                   "alors exactement le texte saisi par l'utilisatrice).",
+    )
+
     scheduled_date = models.DateField(help_text="Jour ouvré prévu (déjà ajusté week-end).")
 
     approved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)

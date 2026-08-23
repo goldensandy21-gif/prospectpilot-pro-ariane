@@ -35,21 +35,31 @@
     <p class="text-muted small mt-2 mb-0">Le test est facultatif — il n'est plus nécessaire pour pouvoir Programmer. Programmer n'envoie rien immédiatement.</p>
   </div>
 
+  <!-- Classe dédiée (jamais « alert ») : static/js/app.js auto-supprime tout
+       .alert après 7s (pensé pour les messages flash Django) — cette
+       bannière doit rester visible tant que la saisie diffère de la
+       version enregistrée, pas seulement 7 secondes. -->
+  <div id="unsaved-banner" class="unsaved-preview-banner d-none d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3"
+       style="background:#fbf1dc;color:#7a5b00;border:1px solid #ecd9a0;border-radius:8px;padding:12px 16px;" role="status">
+    <span><strong>Aperçu des modifications non enregistrées</strong> — rien n'est encore sauvegardé, aucun email n'est affecté.</span>
+    <button type="button" class="btn btn-sm btn-outline-dark" id="reset-btn">Réinitialiser</button>
+  </div>
+
   <div class="row g-3">
     <div class="col-lg-7">
       <div class="cockpit-card">
-        <h2 class="h6">Rendu exact (contenu figé)</h2>
-        <p class="text-muted small mb-1"><strong>Sujet :</strong> {{ planned.subject }}</p>
+        <h2 class="h6">Rendu exact</h2>
+        <p class="text-muted small mb-1"><strong>Sujet :</strong> <span id="preview-subject-line">{{ planned.subject }}</span></p>
         <ul class="nav nav-tabs" id="previewTabs" role="tablist">
           <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#preview-html" type="button">HTML</button></li>
           <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#preview-text" type="button">Texte</button></li>
         </ul>
         <div class="tab-content border border-top-0 p-3">
           <div class="tab-pane fade show active" id="preview-html">
-            <iframe title="Aperçu HTML" style="width:100%;min-height:600px;border:1px solid #e2e6ed;border-radius:8px;" srcdoc="{{ planned.html_body|escape }}"></iframe>
+            <iframe id="preview-iframe" title="Aperçu HTML" style="width:100%;min-height:600px;border:1px solid #e2e6ed;border-radius:8px;" srcdoc="{{ planned.html_body|escape }}"></iframe>
           </div>
           <div class="tab-pane fade" id="preview-text">
-            <pre style="white-space:pre-wrap;">{{ planned.text_body }}</pre>
+            <pre id="preview-pre" style="white-space:pre-wrap;">{{ planned.text_body }}</pre>
           </div>
         </div>
       </div>
@@ -61,9 +71,11 @@
         <p class="text-muted small">
           Corrige uniquement le sujet et le texte rédactionnel visible — jamais de HTML brut. La mise en page
           PredictNeed, le CTA, les liens de suivi, le footer de conformité, le lien de désabonnement et la signature
-          restent automatiquement conservés et ajoutés autour de ton texte.
+          restent automatiquement conservés et ajoutés autour de ton texte. Le panneau « Rendu exact » à gauche se
+          met à jour en direct pendant la saisie — rien n'est enregistré tant que tu ne cliques pas sur
+          « Enregistrer la modification ».
         </p>
-        <form method="post" action="{% url 'email_planning_content_detail' planned.pk %}">
+        <form method="post" action="{% url 'email_planning_content_detail' planned.pk %}" id="edit-form">
           {% csrf_token %}
           <input type="hidden" name="action" value="edit">
           <div class="mb-3">
@@ -73,7 +85,7 @@
           <div class="mb-3">
             <label class="form-label" for="body-text-input">Texte rédactionnel</label>
             <textarea class="form-control" id="body-text-input" name="body_text" rows="10"
-              placeholder="Écris ton propre texte ici (un paragraphe par ligne vide). Le CTA, la signature et le footer de conformité seront ajoutés automatiquement — ne les recopie pas ici."></textarea>
+              placeholder="Un paragraphe par ligne vide. Le CTA, la signature et le footer de conformité seront ajoutés automatiquement — ne les recopie pas ici.">{{ planned.editable_body_text }}</textarea>
           </div>
           <button class="btn btn-outline-dark" type="submit">Enregistrer la modification</button>
         </form>
@@ -88,4 +100,78 @@
 
   <a class="btn btn-outline-dark mt-3" href="{% url 'email_planning_prepared' %}">← Retour aux emails préparés</a>
 </section>
+
+{{ planned.subject|json_script:"original-subject" }}
+{{ planned.editable_body_text|json_script:"original-body" }}
+{{ planned.html_body|json_script:"original-html" }}
+{{ planned.text_body|json_script:"original-text" }}
+
+<script>
+(function () {
+  var previewUrl = "{% url 'email_planning_content_detail' planned.pk %}";
+  var csrfToken = document.querySelector('#edit-form [name=csrfmiddlewaretoken]').value;
+
+  var originalSubject = JSON.parse(document.getElementById('original-subject').textContent);
+  var originalBody = JSON.parse(document.getElementById('original-body').textContent);
+  var originalHtml = JSON.parse(document.getElementById('original-html').textContent);
+  var originalText = JSON.parse(document.getElementById('original-text').textContent);
+
+  var subjectInput = document.getElementById('subject-input');
+  var bodyInput = document.getElementById('body-text-input');
+  var subjectLine = document.getElementById('preview-subject-line');
+  var iframe = document.getElementById('preview-iframe');
+  var pre = document.getElementById('preview-pre');
+  var banner = document.getElementById('unsaved-banner');
+  var resetBtn = document.getElementById('reset-btn');
+
+  function isDirty() {
+    return subjectInput.value !== originalSubject || bodyInput.value !== originalBody;
+  }
+
+  function updateBanner() {
+    banner.classList.toggle('d-none', !isDirty());
+  }
+
+  var debounceTimer = null;
+  function schedulePreviewRefresh() {
+    if (debounceTimer) { clearTimeout(debounceTimer); }
+    debounceTimer = setTimeout(refreshPreview, 400);
+  }
+
+  function refreshPreview() {
+    var formData = new FormData();
+    formData.append('csrfmiddlewaretoken', csrfToken);
+    formData.append('action', 'preview');
+    formData.append('subject', subjectInput.value);
+    formData.append('body_text', bodyInput.value);
+
+    fetch(previewUrl, { method: 'POST', body: formData, headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+      .then(function (response) { return response.json(); })
+      .then(function (data) {
+        iframe.srcdoc = data.html;
+        pre.textContent = data.text;
+      });
+  }
+
+  subjectInput.addEventListener('input', function () {
+    subjectLine.textContent = subjectInput.value;
+    updateBanner();
+  });
+
+  bodyInput.addEventListener('input', function () {
+    updateBanner();
+    schedulePreviewRefresh();
+  });
+
+  resetBtn.addEventListener('click', function () {
+    if (debounceTimer) { clearTimeout(debounceTimer); }
+    subjectInput.value = originalSubject;
+    bodyInput.value = originalBody;
+    subjectLine.textContent = originalSubject;
+    iframe.srcdoc = originalHtml;
+    pre.textContent = originalText;
+    updateBanner();
+  });
+})();
+</script>
 {% endblock %}

@@ -427,7 +427,7 @@ def render_predictneed_html(ctx, product, compliance_profile, prospect, email, o
     return _assemble_envelope_html(greeting, body_html, product, compliance_profile, prospect, email, ctx, open_tracking_url=open_tracking_url)
 
 
-def _body_lines_j0(ctx):
+def _body_lines_j0(ctx, include_protected=True):
     lines = []
     if ctx["observation"]:
         lines += [f"En regardant {ctx['company_name']}, j'ai remarqué : {ctx['observation']}.", ""]
@@ -435,25 +435,27 @@ def _body_lines_j0(ctx):
         lines += [ctx["detected_problem"], ""]
     if ctx["value_proposition"]:
         lines += [ctx["value_proposition"], ""]
-    if ctx["cta_target_url"]:
-        lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
-    lines.append("Vous pouvez aussi simplement répondre à cet e-mail si vous avez une question.")
+    if include_protected:
+        if ctx["cta_target_url"]:
+            lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+        lines.append("Vous pouvez aussi simplement répondre à cet e-mail si vous avez une question.")
     return lines
 
 
-def _body_lines_j4(ctx):
+def _body_lines_j4(ctx, include_protected=True):
     lines = []
     if ctx["observation"]:
         lines += [f"Pour rappel, à propos de {ctx['company_name']} : {ctx['observation']}.", ""]
     elif ctx["detected_problem"]:
         lines += [f"Pour rappel, au sujet de {ctx['company_name']} : {ctx['detected_problem']}.", ""]
-    if ctx["cta_target_url"]:
-        lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
-    lines.append("N'hésitez pas à simplement répondre à cet e-mail si vous avez une question.")
+    if include_protected:
+        if ctx["cta_target_url"]:
+            lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+        lines.append("N'hésitez pas à simplement répondre à cet e-mail si vous avez une question.")
     return lines
 
 
-def _body_lines_j8(ctx):
+def _body_lines_j8(ctx, include_protected=True):
     lines = []
     if ctx["secondary_signal"]:
         lines += [f"Un autre signal observé chez {ctx['company_name']} : {ctx['secondary_signal']}.", ""]
@@ -461,17 +463,19 @@ def _body_lines_j8(ctx):
     elif ctx["detected_problem"]:
         lines += [f"Un autre angle à vérifier : {ctx['detected_problem']}", ""]
         lines += [_FRICTION_HEDGE_SENTENCE, ""]
-    if ctx["cta_target_url"]:
-        lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
-    lines.append("Vous pouvez aussi simplement répondre à cet e-mail.")
+    if include_protected:
+        if ctx["cta_target_url"]:
+            lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+        lines.append("Vous pouvez aussi simplement répondre à cet e-mail.")
     return lines
 
 
-def _body_lines_j14(ctx):
+def _body_lines_j14(ctx, include_protected=True):
     lines = ["Dernier message automatique à ce sujet — je ne relancerai plus après celui-ci.", ""]
-    if ctx["cta_target_url"]:
-        lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
-    lines.append("Vous pouvez bien sûr répondre à cet e-mail si vous avez une question.")
+    if include_protected:
+        if ctx["cta_target_url"]:
+            lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+        lines.append("Vous pouvez bien sûr répondre à cet e-mail si vous avez une question.")
     return lines
 
 
@@ -483,8 +487,31 @@ _BODY_BUILDERS_TEXT = {
 }
 
 
-def _body_lines(ctx, step_order):
-    return _BODY_BUILDERS_TEXT.get(step_order, _body_lines_j0)(ctx)
+def _body_lines(ctx, step_order, include_protected=True):
+    builder = _BODY_BUILDERS_TEXT.get(step_order, _body_lines_j0)
+    return builder(ctx, include_protected=include_protected)
+
+
+def editable_body_text_for_step(campaign_prospect, email_step, request=None):
+    """Workflow live preview (section 1/2) — reconstruit le corps
+    rédactionnel ACTUEL d'une étape, en texte brut, paragraphes séparés par
+    une ligne vide, prêt à préremplir le textarea de modification.
+
+    N'extrait JAMAIS ce texte par un parsing fragile (replace()/positions
+    fixes) d'un HTML/texte déjà rendu : il est composé ici avec exactement
+    les mêmes phrases, mot pour mot, que celles utilisées par
+    render_predictneed_text (_body_lines_j0/j4/j8/j14, `include_protected=
+    False`) — seule la salutation, le lien CTA et la ligne de réponse
+    automatique sont omis, puisqu'ils restent protégés et reconstruits
+    automatiquement à l'enregistrement (voir render_custom_planned_content).
+    Utilisée à la fois par prepare_planned_content() (contenu neuf) et par
+    le backfill contrôlé des PlannedEmailContent antérieurs à ce champ
+    (management command dédié — jamais un rendu silencieux à la volée)."""
+    variant = email_step.variants.filter(active=True).first() if email_step else None
+    ctx = build_predictneed_context(campaign_prospect, email_step=email_step, email_variant=variant, request=request, is_test=False)
+    step_order = email_step.order if email_step else 1
+    paragraphs = [line for line in _body_lines(ctx, step_order, include_protected=False) if line]
+    return "\n\n".join(paragraphs)
 
 
 def _assemble_envelope_text(greeting, body_lines, product, compliance_profile, prospect, email, ctx):

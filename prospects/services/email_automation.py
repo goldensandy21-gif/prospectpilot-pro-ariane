@@ -45,7 +45,12 @@ from ..models import (
 )
 from .campaign_sequencing import _next_step as _sequence_next_step
 from .campaign_sequencing import advance_campaign_prospect
-from .predictneed_email import render_custom_planned_content, render_predictneed_email, send_predictneed_campaign_email
+from .predictneed_email import (
+    editable_body_text_for_step,
+    render_custom_planned_content,
+    render_predictneed_email,
+    send_predictneed_campaign_email,
+)
 from .suppression import is_suppressed
 
 
@@ -169,16 +174,21 @@ def prepare_planned_content(campaign_prospect, email_step, scheduled_date):
     """« Préparer » — génère LA version candidate (un seul rendu, sans
     pixel), statut « à relire ». Toute nouvelle préparation efface une
     éventuelle prise en main manuelle antérieure (`manually_edited_at`) :
-    ce rendu auto-généré redevient la version de référence. `tested_
-    content_hash`/`test_sent_at` sont réinitialisés (le test, désormais
-    facultatif, ne représente plus le contenu courant)."""
+    ce rendu auto-généré redevient la version de référence — y compris
+    `editable_body_text` (workflow live preview, section 1), recalculé ici
+    à partir des mêmes ingrédients (ctx) que `html_body`/`text_body`, jamais
+    extrait par un parsing fragile de ces derniers. `tested_content_hash`/
+    `test_sent_at` sont réinitialisés (le test, désormais facultatif, ne
+    représente plus le contenu courant)."""
     subject, html, text = render_live_content(campaign_prospect, email_step)
+    editable_body_text = editable_body_text_for_step(campaign_prospect, email_step)
     content_hash = content_hash_for(subject, html, text)
 
     planned, _created = PlannedEmailContent.objects.update_or_create(
         campaign_prospect=campaign_prospect, email_step=email_step,
         defaults={
             "subject": subject, "html_body": html, "text_body": text,
+            "editable_body_text": editable_body_text,
             "content_hash": content_hash,
             "scheduled_date": scheduled_date,
             "approved_by": None, "approved_at": None,
@@ -326,13 +336,14 @@ def apply_manual_edit(planned, subject, body_text, request=None):
     planned.subject = subject_clean
     planned.html_body = html
     planned.text_body = text
+    planned.editable_body_text = body_clean
     planned.content_hash = content_hash_for(subject_clean, html, text)
     planned.manually_edited_at = timezone.now()
     planned.approved_by = None
     planned.approved_at = None
     planned.status = "modified" if was_validated else "to_validate"
     planned.save(update_fields=[
-        "subject", "html_body", "text_body", "content_hash", "manually_edited_at",
+        "subject", "html_body", "text_body", "editable_body_text", "content_hash", "manually_edited_at",
         "approved_by", "approved_at", "status", "updated_at",
     ])
     return planned

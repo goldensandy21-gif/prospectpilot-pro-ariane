@@ -6,7 +6,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q, Sum
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -825,6 +825,23 @@ def email_planning_content_detail(request, planned_id):
     if request.method == "POST":
         action = request.POST.get("action")
         from .services.email_automation import apply_manual_edit, promote_campaign_after_validation, send_test_email, validate_planned_content
+        from .services.predictneed_email import render_custom_planned_content
+
+        if action == "preview":
+            # Section 3/4 (correctif éditeur live preview) — reconstruit
+            # EXACTEMENT la même enveloppe que celle qui serait produite par
+            # apply_manual_edit() (même fonction de rendu), sans jamais
+            # écrire en base : ni PlannedEmailContent, ni content_hash, ni
+            # status, ni approved_at/approved_by. Aucun SMTP, aucune
+            # programmation. Une frappe clavier ou un aperçu ne modifie
+            # jamais rien — seul « Enregistrer la modification » (action=
+            # edit) écrit.
+            subject_preview = (request.POST.get("subject", "") or "").strip()
+            body_preview = (request.POST.get("body_text", "") or "").strip()
+            html_preview, text_preview = render_custom_planned_content(
+                planned.campaign_prospect, planned.email_step, body_preview, request=request,
+            )
+            return JsonResponse({"subject": subject_preview, "html": html_preview, "text": text_preview})
 
         if action == "edit":
             subject = request.POST.get("subject", "")
