@@ -23,7 +23,6 @@ par défaut) ne sont JAMAIS concernées par ce module : aucun comportement
 existant n'est modifié pour elles.
 """
 import hashlib
-import secrets
 from datetime import timedelta
 
 from django.db.models import Q
@@ -39,13 +38,14 @@ from ..models import (
     CampaignProspect,
     EmailAutomationSettings,
     EmailSend,
+    EmailSequence,
     EmailStep,
     EmailVariant,
     PlannedEmailContent,
 )
 from .campaign_sequencing import _next_step as _sequence_next_step
 from .campaign_sequencing import advance_campaign_prospect
-from .predictneed_email import render_predictneed_email
+from .predictneed_email import render_predictneed_email, send_predictneed_campaign_email
 
 
 # ---------------------------------------------------------------------------
@@ -154,32 +154,33 @@ def content_hash_for(subject, html_body, text_body):
     return hashlib.sha256(payload).hexdigest()
 
 
-def render_live_content(campaign_prospect, email_step, open_tracking_token=None):
+def render_live_content(campaign_prospect, email_step):
+    """Rendu TOUJOURS sans pixel d'ouverture (section 5, audit correctif
+    final) : le contenu préparé/testé/haché reste strictement le contenu
+    commercial visible. Le pixel n'est injecté qu'au moment du VRAI envoi
+    commercial, jamais avant (voir predictneed_email.inject_open_pixel)."""
     variant = email_step.variants.filter(active=True).first()
-    subject, html, text = render_predictneed_email(
-        campaign_prospect, email_step, variant, request=None,
-        open_tracking_token=open_tracking_token,
-    )
+    subject, html, text = render_predictneed_email(campaign_prospect, email_step, variant, request=None)
     return subject, html, text
 
 
 def prepare_planned_content(campaign_prospect, email_step, scheduled_date):
-    """« Préparer » — génère LA version candidate (un seul rendu), statut
-    « à valider ». Le token de pixel est généré ICI et jamais régénéré
-    ensuite : le test et l'envoi commercial réel réutilisent ce même
-    contenu tel quel. Idempotent : réappeler avant validation régénère
-    volontairement (l'utilisateur a demandé un nouveau « Préparer »)."""
-    open_token = secrets.token_urlsafe(32)
-    subject, html, text = render_live_content(campaign_prospect, email_step, open_tracking_token=open_token)
+    """« Préparer » — génère LA version candidate (un seul rendu, sans
+    pixel), statut « à valider ». Toute nouvelle préparation invalide le
+    test précédent (section 4) : `tested_content_hash`/`test_sent_at` sont
+    réinitialisés, la validation exigera un nouveau test réussi sur CE
+    contenu précis avant de pouvoir programmer l'envoi."""
+    subject, html, text = render_live_content(campaign_prospect, email_step)
     content_hash = content_hash_for(subject, html, text)
 
     planned, _created = PlannedEmailContent.objects.update_or_create(
         campaign_prospect=campaign_prospect, email_step=email_step,
         defaults={
             "subject": subject, "html_body": html, "text_body": text,
-            "content_hash": content_hash, "open_tracking_token": open_token,
+            "content_hash": content_hash,
             "scheduled_date": scheduled_date,
             "approved_by": None, "approved_at": None,
+            "tested_content_hash": "", "test_sent_at": None,
             "status": "to_validate",
         },
     )
@@ -187,10 +188,10 @@ def prepare_planned_content(campaign_prospect, email_step, scheduled_date):
 
 
 def is_content_stale(planned):
-    """Compare le hash figé à un nouveau rendu live (avec le MÊME token de
-    pixel déjà stocké, pour ne comparer que le contenu visible) : si le
-    prospect/produit a changé depuis la préparation, le contenu est jugé
-    obsolète — jamais renvoyé silencieusement.
+    """Compare le hash figé à un nouveau rendu live (sans pixel — seul le
+    contenu commercial visible compte) : si le prospect/produit a changé
+    depuis la préparation, le contenu est jugé obsolète — jamais renvoyé
+    silencieusement.
 
     Recharge explicitement `campaign_prospect`/`prospect` depuis la base à
     chaque appel plutôt que d'utiliser `planned.campaign_prospect` tel quel :
@@ -200,10 +201,7 @@ def is_content_stale(planned):
     campaign_prospect = CampaignProspect.objects.select_related("prospect", "campaign").get(
         pk=planned.campaign_prospect_id,
     )
-    subject, html, text = render_live_content(
-        campaign_prospect, planned.email_step,
-        open_tracking_token=planned.open_tracking_token or None,
-    )
+    subject, html, text = render_live_content(campaign_prospect, planned.email_step)
     return content_hash_for(subject, html, text) != planned.content_hash
 
 
@@ -214,28 +212,66 @@ def mark_stale_if_changed(planned):
     return planned
 
 
+def send_test_email(campaign_prospect, planned, test_recipient, request=None, now=None):
+    """« Envoyer les tests » — envoie EXACTEMENT planned.{subject,html_body,
+    text_body} (jamais un nouveau rendu) à `test_recipient`, avec
+    is_test=True (donc jamais de pixel — voir
+    predictneed_email.send_predictneed_campaign_email). Si l'envoi réussit,
+    marque `planned` comme testé POUR CE CONTENU PRÉCIS (section 4) :
+    `validate_planned_content` exigera `tested_content_hash == content_hash`
+    pour autoriser la validation. Un échec d'envoi ne marque rien — le test
+    devra être relancé."""
+    record = send_predictneed_campaign_email(
+        campaign_prospect, planned.email_step, request=request, is_test=True,
+        test_recipient=test_recipient,
+        frozen_content={"subject": planned.subject, "html_body": planned.html_body, "text_body": planned.text_body},
+        now=now,
+    )
+    if record.status == "sent":
+        planned.tested_content_hash = planned.content_hash
+        planned.test_sent_at = timezone.now()
+        planned.save(update_fields=["tested_content_hash", "test_sent_at", "updated_at"])
+    return record
+
+
 def validate_planned_content(planned, user):
-    """« Valider et programmer » — NE régénère jamais le texte. Vérifie
-    seulement que le rendu live correspond toujours au hash figé lors de la
-    préparation ; si les données source ont changé entre-temps, marque
-    `stale` et refuse la validation (il faut relancer « Préparer »).
-    Renvoie True si validé, False si resté/passé `stale`."""
+    """« Valider et programmer » — NE régénère jamais le texte. Renvoie
+    (autorisé: bool, motif: str) — motif vide si autorisé.
+
+    Deux garde-fous, dans cet ordre :
+    1) le rendu live doit toujours correspondre au hash figé lors de la
+       préparation ; si les données source ont changé entre-temps -> `stale`
+       (il faut relancer « Préparer ») ;
+    2) (section 4, audit correctif final) un envoi de test RÉUSSI doit avoir
+       eu lieu sur EXACTEMENT ce contenu (`tested_content_hash ==
+       content_hash`) ; toute préparation ou modification postérieure au
+       test invalide automatiquement ce dernier (prepare_planned_content
+       réinitialise tested_content_hash) -> `test_required` sinon. Un POST
+       direct vers la validation sans test réussi préalable est donc
+       toujours refusé, ici, côté serveur."""
     if is_content_stale(planned):
         planned.status = "stale"
         planned.save(update_fields=["status", "updated_at"])
-        return False
+        return False, "stale"
+    if not planned.tested_content_hash or planned.tested_content_hash != planned.content_hash:
+        return False, "test_required"
     planned.status = "validated"
     planned.approved_by = user
     planned.approved_at = timezone.now()
     planned.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
-    return True
+    return True, ""
 
 
-def freeze_planned_content(campaign_prospect, email_step, user, scheduled_date):
-    """Combinateur de convenance : prépare PUIS valide immédiatement, en un
-    seul rendu (utilisé par les tests et par tout appelant qui n'a pas
-    besoin de séparer les deux étapes humaines)."""
+def freeze_planned_content(campaign_prospect, email_step, user, scheduled_date, test_recipient=""):
+    """Combinateur de convenance : prépare, envoie le test réel désormais
+    obligatoire (section 4), PUIS valide — en un seul appel (utilisé par les
+    tests et par tout appelant qui n'a pas besoin de séparer les 3 étapes
+    humaines). Le test part vers `test_recipient`, ou à défaut l'adresse
+    d'expédition du produit (adresse interne, jamais un vrai prospect)."""
     planned = prepare_planned_content(campaign_prospect, email_step, scheduled_date)
+    recipient = test_recipient or campaign_prospect.campaign.product.sender_email or "contact-predict@predictneed-ia.com"
+    send_test_email(campaign_prospect, planned, recipient)
+    planned.refresh_from_db()
     validate_planned_content(planned, user)
     planned.refresh_from_db()
     return planned
@@ -253,26 +289,101 @@ FOUR_STEP_SPECS = [
 ]
 
 
-def ensure_four_step_sequence(sequence):
-    """Complète une séquence pour qu'elle possède exactement les 4 étapes
-    email J0(0)/J4(4)/J8(4)/J14(6) — NE TOUCHE JAMAIS une étape déjà
-    existante (le J0 personnalisé existant, notamment, n'est ni modifié ni
-    remplacé) ; crée uniquement ce qui manque, avec un sujet générique de
-    repli (à personnaliser ensuite normalement via le Planning)."""
-    existing_orders = set(sequence.steps.values_list("order", flat=True))
-    for order, delay, name in FOUR_STEP_SPECS:
-        if order in existing_orders:
-            continue
-        step = EmailStep.objects.create(sequence=sequence, order=order, delay_days=delay, name=name, channel="email")
-        EmailVariant.objects.create(
-            step=step, name=name, cta_type="simulator",
-            subject_template=f"{{{{ company_name }}}} — {name.lower()}",
+def clone_sequence_for_campaign(sequence, campaign):
+    """Section 2 — copie profonde d'une EmailSequence (+ ses EmailStep + leurs
+    EmailVariant) en une séquence toute neuve, dédiée à `campaign`. NE
+    MODIFIE JAMAIS `sequence` : une autre campagne peut la référencer et doit
+    la conserver strictement identique. C'est ce clone, jamais l'original,
+    qui sera ensuite normalisé par normalize_planning_sequence()."""
+    clone = EmailSequence.objects.create(
+        product=sequence.product, icp=sequence.icp,
+        name=f"{sequence.name} — copie Planning ({campaign.name})",
+        active=sequence.active,
+        stop_on_reply=sequence.stop_on_reply,
+        stop_on_conversion=sequence.stop_on_conversion,
+        stop_on_unsubscribe=sequence.stop_on_unsubscribe,
+    )
+    for step in sequence.steps.order_by("order"):
+        cloned_step = EmailStep.objects.create(
+            sequence=clone, order=step.order, delay_days=step.delay_days,
+            name=step.name, channel=step.channel, active=step.active,
+            advance_condition=step.advance_condition,
         )
+        for variant in step.variants.all():
+            EmailVariant.objects.create(
+                step=cloned_step, name=variant.name, active=variant.active,
+                subject_template=variant.subject_template,
+                cta_type=variant.cta_type, cta_label_override=variant.cta_label_override,
+                weight=variant.weight,
+            )
+    return clone
+
+
+def normalize_planning_sequence(sequence):
+    """Section 1 — corrige RÉELLEMENT `delay_days`/`channel` sur les 4
+    étapes canoniques J0(0)/J4(4)/J8(4)/J14(6) (cumulatif 0/4/8/14), y
+    compris sur des étapes DÉJÀ existantes dont le délai serait incorrect —
+    par exemple une séquence historique stockée 0/4/8 (get_or_create_default_
+    sequence) dont le cumulatif réel serait 0/4/12, pas 0/4/8 puisque
+    delay_days est relatif à l'étape précédente. Crée les étapes manquantes
+    avec un sujet générique de repli. NE TOUCHE JAMAIS
+    EmailVariant.subject_template d'une étape déjà existante (le J0
+    personnalisé, notamment, n'est ni modifié ni remplacé) — crée
+    uniquement les variantes manquantes.
+
+    NE DOIT JAMAIS être appelée directement sur une séquence potentiellement
+    partagée par une autre campagne : `sequence` doit toujours être soit un
+    clone dédié (clone_sequence_for_campaign), soit une séquence Planning
+    fraîchement créée pour cet usage exclusif
+    (get_or_create_planning_default_sequence)."""
+    existing_steps = {s.order: s for s in sequence.steps.all()}
+    for order, delay, name in FOUR_STEP_SPECS:
+        step = existing_steps.get(order)
+        if step is None:
+            step = EmailStep.objects.create(sequence=sequence, order=order, delay_days=delay, name=name, channel="email")
+            EmailVariant.objects.create(
+                step=step, name=name, cta_type="simulator",
+                subject_template=f"{{{{ company_name }}}} — {name.lower()}",
+            )
+            continue
+        updates = []
+        if step.delay_days != delay:
+            step.delay_days = delay
+            updates.append("delay_days")
+        if step.channel != "email":
+            step.channel = "email"
+            updates.append("channel")
+        if updates:
+            step.save(update_fields=updates)
+        if not step.variants.exists():
+            EmailVariant.objects.create(
+                step=step, name=name, cta_type="simulator",
+                subject_template=f"{{{{ company_name }}}} — {name.lower()}",
+            )
+    return sequence
+
+
+def get_or_create_planning_default_sequence(product, icp):
+    """Section 3 — séquence par défaut dédiée aux NOUVELLES campagnes
+    Planning sans séquence explicitement choisie. Distincte de
+    campaign_sending.get_or_create_default_sequence() (séquence legacy 3
+    étapes 0/4/8, jamais garantie 4 étapes) : cette séquence-ci est
+    exclusivement utilisée par le Planning, jamais partagée avec une
+    campagne manuelle préexistante, donc toujours sûre à normaliser
+    directement (pas de clone nécessaire — rien d'autre ne la référence à sa
+    création)."""
+    sequence, created = EmailSequence.objects.get_or_create(
+        product=product, icp=icp,
+        name=f"Séquence planning J0-J14 — {icp.name if icp else product.name}",
+        defaults={"active": True},
+    )
+    if created or sequence.steps.count() < 4:
+        normalize_planning_sequence(sequence)
     return sequence
 
 
 def adopt_campaign_into_planning(campaign, user=None):
-    """Section 1 — fait entrer PROPREMENT une campagne existante (créée
+    """Section 1/2 — fait entrer PROPREMENT une campagne existante (créée
     avant `planning_managed`) dans le Planning e-mail, sans envoi et sans
     considérer son ancienne validation comme une nouvelle approbation.
 
@@ -286,7 +397,11 @@ def adopt_campaign_into_planning(campaign, user=None):
     - passe planning_managed=True ;
     - conserve prospect, AgentBrief, destinataire, et le J0 personnalisé
       existant tels quels ;
-    - complète la séquence à 4 étapes (sans écraser le J0 existant) ;
+    - (section 2) CLONE TOUJOURS la séquence avant de la compléter à 4
+      étapes — jamais de modification de la séquence d'origine, que celle-ci
+      soit ou non partagée par une autre campagne : une autre campagne
+      utilisant l'ancienne séquence reste ainsi strictement byte pour byte
+      inchangée ;
     - relève total_limit à au moins 4 (sinon J4/J8/J14 resteraient bloqués
       par l'ancienne limite total_limit=1)."""
     members = list(campaign.campaign_prospects.select_related("prospect").all())
@@ -302,15 +417,17 @@ def adopt_campaign_into_planning(campaign, user=None):
     if not campaign.sequence:
         raise ValueError(f"Campagne « {campaign.name} » sans séquence — adoption impossible.")
 
-    ensure_four_step_sequence(campaign.sequence)
+    clone = clone_sequence_for_campaign(campaign.sequence, campaign)
+    normalize_planning_sequence(clone)
 
+    campaign.sequence = clone
     campaign.planning_managed = True
     campaign.status = "draft"
     campaign.validated_at = None
     campaign.validated_by = None
     if campaign.total_limit < 4:
         campaign.total_limit = 4
-    campaign.save(update_fields=["planning_managed", "status", "validated_at", "validated_by", "total_limit"])
+    campaign.save(update_fields=["sequence", "planning_managed", "status", "validated_at", "validated_by", "total_limit"])
     return campaign
 
 

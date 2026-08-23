@@ -442,4 +442,4 @@ class PlannedEmailContentAdmin(admin.ModelAdmin):
     list_display = ("campaign_prospect", "email_step", "status", "scheduled_date", "approved_by", "approved_at")
     list_filter = ("status", "email_step")
     search_fields = ("campaign_prospect__prospect__name", "subject")
-    readonly_fields = ("content_hash", "open_tracking_token", "created_at", "updated_at")
+    readonly_fields = ("content_hash", "tested_content_hash", "test_sent_at", "created_at", "updated_at")

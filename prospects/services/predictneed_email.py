@@ -166,9 +166,55 @@ def _benefit_block_html(title, description):
     )
 
 
-def render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=None):
-    greeting = f"Bonjour {escape(ctx['first_name'])}," if ctx["first_name"] else "Bonjour,"
+def _cta_button_html(ctx):
+    if not ctx["cta_target_url"]:
+        return ""
+    cta_url = escape(ctx["cta_url"])
+    cta_label = escape(ctx["cta_label"])
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px 0;">'
+        '<tr><td align="center">'
+        "<!--[if mso]>"
+        f'<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" '
+        f'href="{cta_url}" style="height:46px;v-text-anchor:middle;width:280px;" arcsize="10%" '
+        f'strokecolor="{ACCENT_BLUE}" fillcolor="{ACCENT_BLUE}">'
+        '<w:anchorlock/>'
+        f'<center style="color:#ffffff;font-family:Arial,sans-serif;font-size:15px;font-weight:bold;">{cta_label}</center>'
+        "</v:roundrect>"
+        "<![endif]-->"
+        "<!--[if !mso]><!-->"
+        f'<a href="{cta_url}" style="background:{ACCENT_BLUE};border-radius:8px;color:#ffffff;'
+        'display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;'
+        'line-height:46px;padding:0 28px;text-align:center;text-decoration:none;-webkit-text-size-adjust:none;'
+        f'mso-hide:all;">{cta_label}</a>'
+        "<!--<![endif]-->"
+        "</td></tr></table>"
+    )
 
+
+def _cta_link_html(ctx):
+    """CTA discret (lien texte, pas de gros bouton) — utilisé J8/J14
+    (section 6, audit correctif final) : une relance déjà avancée dans la
+    séquence appelle un ton plus discret qu'un premier contact."""
+    if not ctx["cta_target_url"]:
+        return ""
+    return (
+        '<p style="margin:0 0 22px 0;font-size:14px;line-height:1.6;">'
+        f'<a href="{escape(ctx["cta_url"])}" style="color:{ACCENT_BLUE};font-weight:600;text-decoration:underline;">'
+        f'{escape(ctx["cta_label"])}</a></p>'
+    )
+
+
+def _reply_line_html():
+    return (
+        f'<p style="margin:0 0 26px 0;font-size:13px;line-height:1.6;color:{INK_SOFT};">'
+        "Vous pouvez aussi simplement répondre à cet e-mail si vous avez une question.</p>"
+    )
+
+
+def _body_blocks_j0_html(ctx):
+    """J0 — premier contact : template complet inchangé (observation +
+    accroche encadrée + proposition de valeur + 3 blocs bénéfices + CTA)."""
     intro_html = ""
     if ctx["observation"]:
         intro_html = (
@@ -203,35 +249,74 @@ def render_predictneed_html(ctx, product, compliance_profile, prospect, email, o
         f"<tr><td>{benefits_html}</td></tr></table>"
     )
 
-    cta_html = ""
-    if ctx["cta_target_url"]:
-        cta_url = escape(ctx["cta_url"])
-        cta_label = escape(ctx["cta_label"])
-        cta_html = (
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px 0;">'
-            '<tr><td align="center">'
-            "<!--[if mso]>"
-            f'<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" '
-            f'href="{cta_url}" style="height:46px;v-text-anchor:middle;width:280px;" arcsize="10%" '
-            f'strokecolor="{ACCENT_BLUE}" fillcolor="{ACCENT_BLUE}">'
-            '<w:anchorlock/>'
-            f'<center style="color:#ffffff;font-family:Arial,sans-serif;font-size:15px;font-weight:bold;">{cta_label}</center>'
-            "</v:roundrect>"
-            "<![endif]-->"
-            "<!--[if !mso]><!-->"
-            f'<a href="{cta_url}" style="background:{ACCENT_BLUE};border-radius:8px;color:#ffffff;'
-            'display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;'
-            'line-height:46px;padding:0 28px;text-align:center;text-decoration:none;-webkit-text-size-adjust:none;'
-            f'mso-hide:all;">{cta_label}</a>'
-            "<!--<![endif]-->"
-            "</td></tr></table>"
+    return intro_html + headline_html + value_prop_html + benefits_section + _cta_button_html(ctx) + _reply_line_html()
+
+
+def _body_blocks_j4_html(ctx):
+    """J4 — rappel court (section 6) : ne répète JAMAIS les 3 blocs
+    bénéfices ni l'accroche encadrée de J0 — un simple rappel bref de
+    l'observation déjà envoyée, puis le même type de CTA."""
+    recall_html = ""
+    if ctx["observation"]:
+        recall_html = (
+            f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:{INK};">'
+            f'Pour rappel, à propos de {escape(ctx["company_name"])} : {escape(ctx["observation"])}.</p>'
         )
+    elif ctx["detected_problem"]:
+        recall_html = (
+            f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:{INK};">'
+            f'Pour rappel, au sujet de {escape(ctx["company_name"])} : {escape(ctx["detected_problem"])}.</p>'
+        )
+    return recall_html + _cta_button_html(ctx) + _reply_line_html()
 
-    reply_html = (
-        f'<p style="margin:0 0 26px 0;font-size:13px;line-height:1.6;color:{INK_SOFT};">'
-        "Vous pouvez aussi simplement répondre à cet e-mail si vous avez une question.</p>"
+
+def _body_blocks_j8_html(ctx):
+    """J8 — nouvel angle (section 6) : un signal réel différent de celui du
+    J0, toujours au conditionnel/hedged (jamais de certitude affirmée sur
+    l'intention du visiteur), CTA discret plutôt qu'un gros bouton."""
+    angle_parts = []
+    if ctx["detected_signal"]:
+        angle_parts.append(
+            f'Un autre signal observé chez {escape(ctx["company_name"])} : {escape(ctx["detected_signal"])}.'
+        )
+    if ctx["detected_problem"]:
+        angle_parts.append(
+            f'Cela peut parfois indiquer {escape(ctx["detected_problem"].lower())}, sans certitude — '
+            "un point de friction possible dans le parcours de conversion."
+        )
+    angle_html = ""
+    if angle_parts:
+        angle_html = (
+            f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:{INK};">{" ".join(angle_parts)}</p>'
+        )
+    return angle_html + _cta_link_html(ctx) + _reply_line_html()
+
+
+def _body_blocks_j14_html(ctx):
+    """J14 — dernière relance (section 6) : très court, indique
+    explicitement qu'aucune autre relance automatique ne suivra."""
+    last_html = (
+        f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:{INK};">'
+        "Dernier message automatique à ce sujet — je ne relancerai plus après celui-ci.</p>"
     )
+    return last_html + _cta_link_html(ctx) + _reply_line_html()
 
+
+_BODY_BUILDERS_HTML = {
+    1: _body_blocks_j0_html,
+    2: _body_blocks_j4_html,
+    3: _body_blocks_j8_html,
+    4: _body_blocks_j14_html,
+}
+
+
+def _body_blocks_html(ctx, step_order):
+    return _BODY_BUILDERS_HTML.get(step_order, _body_blocks_j0_html)(ctx)
+
+
+def render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=None, step_order=1):
+    greeting = f"Bonjour {escape(ctx['first_name'])}," if ctx["first_name"] else "Bonjour,"
+    body_html = _body_blocks_html(ctx, step_order)
     signature_html = "<br>".join(escape(line) for line in _signature_lines(product))
 
     # Section H (automatisation email) — pixel d'ouverture indicatif, jamais
@@ -261,7 +346,7 @@ def render_predictneed_html(ctx, product, compliance_profile, prospect, email, o
         # Corps blanc.
         f'<tr><td style="padding:32px 32px 8px 32px;">'
         f'<p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:{INK};">{greeting}</p>'
-        f"{intro_html}{headline_html}{value_prop_html}{benefits_section}{cta_html}{reply_html}"
+        f"{body_html}"
         f'<p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:{INK};">Bien cordialement,<br>{signature_html}</p>'
         "</td></tr>"
         f"{render_compliance_footer_html(prospect, product, compliance_profile, ctx['unsubscribe_url'], ctx['privacy_url'], email)}"
@@ -269,17 +354,109 @@ def render_predictneed_html(ctx, product, compliance_profile, prospect, email, o
     )
 
 
+def _body_lines_j0(ctx):
+    lines = []
+    if ctx["observation"]:
+        lines += [f"En regardant {ctx['company_name']}, j'ai remarqué : {ctx['observation']}.", ""]
+    if ctx["detected_problem"]:
+        lines += [ctx["detected_problem"], ""]
+    if ctx["value_proposition"]:
+        lines += [ctx["value_proposition"], ""]
+    if ctx["cta_target_url"]:
+        lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+    lines.append("Vous pouvez aussi simplement répondre à cet e-mail si vous avez une question.")
+    return lines
+
+
+def _body_lines_j4(ctx):
+    lines = []
+    if ctx["observation"]:
+        lines += [f"Pour rappel, à propos de {ctx['company_name']} : {ctx['observation']}.", ""]
+    elif ctx["detected_problem"]:
+        lines += [f"Pour rappel, au sujet de {ctx['company_name']} : {ctx['detected_problem']}.", ""]
+    if ctx["cta_target_url"]:
+        lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+    lines.append("N'hésitez pas à simplement répondre à cet e-mail si vous avez une question.")
+    return lines
+
+
+def _body_lines_j8(ctx):
+    lines = []
+    if ctx["detected_signal"]:
+        lines += [f"Un autre signal observé chez {ctx['company_name']} : {ctx['detected_signal']}.", ""]
+    if ctx["detected_problem"]:
+        lines += [
+            f"Cela peut parfois indiquer {ctx['detected_problem'].lower()}, sans certitude — "
+            "un point de friction possible dans le parcours de conversion.",
+            "",
+        ]
+    if ctx["cta_target_url"]:
+        lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+    lines.append("Vous pouvez aussi simplement répondre à cet e-mail.")
+    return lines
+
+
+def _body_lines_j14(ctx):
+    lines = ["Dernier message automatique à ce sujet — je ne relancerai plus après celui-ci.", ""]
+    if ctx["cta_target_url"]:
+        lines += [f"{ctx['cta_label']} : {ctx['cta_url']}", ""]
+    lines.append("Vous pouvez bien sûr répondre à cet e-mail si vous avez une question.")
+    return lines
+
+
+_BODY_BUILDERS_TEXT = {
+    1: _body_lines_j0,
+    2: _body_lines_j4,
+    3: _body_lines_j8,
+    4: _body_lines_j14,
+}
+
+
+def _body_lines(ctx, step_order):
+    return _BODY_BUILDERS_TEXT.get(step_order, _body_lines_j0)(ctx)
+
+
+def render_predictneed_text(ctx, product, compliance_profile, prospect, email, step_order=1):
+    greeting = f"Bonjour {ctx['first_name']}," if ctx["first_name"] else "Bonjour,"
+    body_lines = [greeting, ""]
+    body_lines.extend(_body_lines(ctx, step_order))
+    body_lines.append("")
+    body_lines.append("Bien cordialement,")
+    body_lines.extend(_signature_lines(product))
+    body_lines.append("")
+    body_lines.append("---")
+    body_lines.append(render_compliance_footer_text(prospect, product, compliance_profile, ctx["unsubscribe_url"], ctx["privacy_url"], email))
+    return "\n".join(body_lines)
+
+
+def inject_open_pixel(html_body, open_tracking_token, request=None):
+    """Insère le pixel d'ouverture UNIQUEMENT au moment du VRAI envoi
+    commercial (section 5, audit correctif final) — jamais dans le contenu
+    préparé/testé (PlannedEmailContent.html_body reste pixel-free). Le token
+    est généré par l'appelant à cet instant précis, jamais réutilisé depuis
+    PlannedEmailContent : réutiliser un même pixel entre le test et l'envoi
+    commercial risquerait un cache client (Gmail/Outlook) masquant
+    l'ouverture réelle, et un faux open_count si le test est rouvert après
+    coup."""
+    pixel_url = build_open_tracking_url(open_tracking_token, request=request)
+    pixel_html = f'<img src="{escape(pixel_url)}" width="1" height="1" alt="" style="display:block;border:0;">'
+    if "</body>" in html_body:
+        return html_body.replace("</body>", f"{pixel_html}</body>", 1)
+    return html_body + pixel_html
+
+
 def render_predictneed_email(campaign_prospect, email_step=None, email_variant=None, request=None, open_tracking_token=None):
     prospect = campaign_prospect.prospect
     product = campaign_prospect.campaign.product
     compliance_profile = getattr(product, "compliance_profile", None)
     email = prospect.public_email or ""
+    step_order = email_step.order if email_step else 1
 
     ctx = build_predictneed_context(campaign_prospect, email_step=email_step, email_variant=email_variant, request=request)
     subject = render_predictneed_subject(email_variant, ctx)
     open_tracking_url = build_open_tracking_url(open_tracking_token, request=request) if open_tracking_token else None
-    html = render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=open_tracking_url)
-    text = render_predictneed_text(ctx, product, compliance_profile, prospect, email)
+    html = render_predictneed_html(ctx, product, compliance_profile, prospect, email, open_tracking_url=open_tracking_url, step_order=step_order)
+    text = render_predictneed_text(ctx, product, compliance_profile, prospect, email, step_order=step_order)
     return subject, html, text
 
 
@@ -288,12 +465,20 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
     avant SMTP, identité d'expéditeur centralisée, Message-ID et List-Unsubscribe.
 
     `frozen_content` (section E, automatisation email) : dict optionnel
-    {"subject", "html_body", "text_body", "open_tracking_token"} produit par
-    services/email_automation.py::freeze_planned_content(). Quand fourni, le
-    contenu n'est PAS régénéré ici — c'est exactement le contenu approuvé et
+    {"subject", "html_body", "text_body"} produit par
+    services/email_automation.py::prepare_planned_content(). Quand fourni, le
+    texte n'est PAS régénéré ici — c'est exactement le contenu approuvé et
     figé au moment de la validation humaine qui part en SMTP, jamais un
     nouveau rendu silencieux. Sans `frozen_content`, comportement inchangé
     (rendu live, comme avant cette section).
+
+    Le pixel d'ouverture n'est JAMAIS présent dans `frozen_content["html_body"]`
+    (section 5, audit correctif final) : pour un test (`is_test=True`), le
+    HTML part tel quel, sans pixel. Pour un envoi commercial réel, un token
+    unique est généré ICI et injecté seulement maintenant — jamais réutilisé
+    depuis PlannedEmailContent — pour éviter tout cache client (Gmail/Outlook)
+    sur le pixel du test, et tout faux `open_count` si le test est rouvert
+    après l'envoi réel.
 
     `now` (section 6, retry/backoff) : uniquement utilisé pour calculer
     `next_retry_at` en cas d'échec, cohérent avec le `now` simulé par
@@ -306,9 +491,13 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
 
     if frozen_content:
         subject = frozen_content["subject"]
-        html = frozen_content["html_body"]
         text = frozen_content["text_body"]
-        open_tracking_token = frozen_content.get("open_tracking_token", "")
+        if is_test:
+            html = frozen_content["html_body"]
+            open_tracking_token = ""
+        else:
+            open_tracking_token = secrets.token_urlsafe(32)
+            html = inject_open_pixel(frozen_content["html_body"], open_tracking_token, request=request)
     else:
         # Pixel d'ouverture (section H) : jamais pour un envoi de test, pour
         # ne polluer aucune donnée commerciale ; token opaque non séquentiel.

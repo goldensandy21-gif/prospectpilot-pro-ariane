@@ -262,7 +262,11 @@ class ValidationRequiredAndFrozenContentTests(TestCase):
         self.assertEqual(result["action"], "email")
         record = EmailSend.objects.filter(campaign_prospect=self.member, is_test=False).latest("id")
         self.assertEqual(record.subject, original_subject)
-        self.assertEqual(record.html_body, planned.html_body)
+        # Section 5 (audit correctif final) : le pixel d'ouverture n'est
+        # injecté qu'au moment du vrai envoi — record.html_body est donc
+        # planned.html_body + pixel, jamais strictement identique.
+        from prospects.services.predictneed_email import inject_open_pixel
+        self.assertEqual(record.html_body, inject_open_pixel(planned.html_body, record.open_tracking_token))
         self.assertEqual(record.text_body, planned.text_body)
 
     def test_content_becomes_stale_when_prospect_changes_after_validation(self):
@@ -315,7 +319,7 @@ class SchedulerIdempotenceAndLimitsTests(TestCase):
         saturday = datetime.datetime(2026, 8, 22, 8, 0, tzinfo=datetime.timezone.utc)
         result = run_planning_scheduler(now=saturday)
         self.assertEqual(result["action"], "outside_window")
-        self.assertEqual(EmailSend.objects.filter(campaign_prospect=member).count(), 0)
+        self.assertEqual(EmailSend.objects.filter(campaign_prospect=member, is_test=False).count(), 0)
 
     def test_scheduler_sends_within_window(self):
         self._make_ready_member("Alpha", "00000000000002")
@@ -453,6 +457,38 @@ class OpenTrackingTests(TestCase):
         self.assertNotIn("width=\"1\" height=\"1\"", record.html_body)
         self.assertEqual(EngagementEvent.objects.filter(event_type="email_opened").count(), 0)
 
+    def test_reopening_test_never_increases_real_open_count(self):
+        """Section 5 (audit correctif final) — le test n'embarque plus jamais
+        de pixel : le rouvrir avant OU après le vrai envoi commercial ne
+        doit jamais faire varier open_count du vrai EmailSend, et le vrai
+        pixel n'est jamais le même token que celui (absent) du test."""
+        planned = freeze_planned_content(self.member, self.step1, user=None, scheduled_date=timezone.now().date())
+        test_record = EmailSend.objects.filter(campaign_prospect=self.member, is_test=True).latest("id")
+        self.assertEqual(test_record.open_tracking_token, "")
+        self.assertNotIn("width=\"1\" height=\"1\"", test_record.html_body)
+
+        advance_campaign_prospect(self.member.pk)
+        real_record = EmailSend.objects.filter(campaign_prospect=self.member, is_test=False).latest("id")
+        self.assertTrue(real_record.open_tracking_token)
+        self.assertNotEqual(real_record.open_tracking_token, test_record.open_tracking_token)
+        self.assertEqual(real_record.open_count, 0)
+
+        # Aucun token exploitable côté test -> rien à "rouvrir" qui puisse
+        # jamais toucher le vrai envoi, avant ou après coup.
+        response = self.client.get(reverse("track_email_open", kwargs={"token": "test-had-no-real-token"}))
+        self.assertEqual(response.status_code, 200)
+        real_record.refresh_from_db()
+        self.assertEqual(real_record.open_count, 0)
+
+        self.client.get(reverse("track_email_open", kwargs={"token": real_record.open_tracking_token}))
+        real_record.refresh_from_db()
+        self.assertEqual(real_record.open_count, 1)
+
+        response = self.client.get(reverse("track_email_open", kwargs={"token": "test-had-no-real-token"}))
+        self.assertEqual(response.status_code, 200)
+        real_record.refresh_from_db()
+        self.assertEqual(real_record.open_count, 1)  # inchangé après "réouverture" du test
+
     def test_unknown_token_is_harmless(self):
         response = self.client.get(reverse("track_email_open", kwargs={"token": "does-not-exist"}))
         self.assertEqual(response.status_code, 200)
@@ -476,9 +512,10 @@ class NewTemplateAndFooterAlwaysPresentInFrozenContentTests(TestCase):
         self.assertIn("Comportements observés", planned.html_body)
         self.assertIn("Se désabonner", planned.html_body)
         self.assertIn("Se désabonner", planned.text_body)
-        # Une seule balise <img> : le pixel d'ouverture — jamais une photo/portrait.
-        self.assertEqual(planned.html_body.count("<img"), 1)
-        self.assertIn(planned.open_tracking_token, planned.html_body)
+        # Section 5 (audit correctif final) — AUCUN pixel dans le contenu
+        # préparé/testé : il n'est injecté qu'au moment du vrai envoi
+        # commercial (voir OpenTrackingTests.test_real_send_embeds_a_pixel_and_creates_token).
+        self.assertEqual(planned.html_body.count("<img"), 0)
 
 
 class InboundReplyMatchingTests(TestCase):

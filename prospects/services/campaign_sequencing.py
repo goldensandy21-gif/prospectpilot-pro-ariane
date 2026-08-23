@@ -53,16 +53,25 @@ STOP_CONTACT_LOG_OUTCOMES = {"replied", "meeting", "proposal", "optout"}
 
 
 def _campaign_action_counts(campaign, today):
-    """Nombre d'actions sortantes (e-mail + LinkedIn confondus) déjà
-    exécutées pour cette campagne aujourd'hui et au total — sert à faire
-    respecter daily_send_limit/total_limit quel que soit le canal."""
+    """Nombre d'actions sortantes COMMERCIALES RÉELLES (e-mail + LinkedIn
+    confondus) déjà exécutées pour cette campagne aujourd'hui et au total —
+    sert à faire respecter daily_send_limit/total_limit quel que soit le
+    canal.
+
+    Exclut explicitement is_test=True (section 4, audit correctif final) :
+    un test (« Envoyer les tests », ou le test désormais obligatoire avant
+    toute validation) n'est jamais une action commerciale et ne doit jamais
+    consommer le budget daily_send_limit/total_limit d'une campagne — sans
+    quoi une seule campagne à daily_send_limit=1 verrait son unique
+    créneau du jour épuisé par un simple test, avant même le premier envoi
+    réel."""
     email_today = EmailSend.objects.filter(
-        campaign_prospect__campaign=campaign, created_at__date=today,
+        campaign_prospect__campaign=campaign, created_at__date=today, is_test=False,
     ).exclude(status="draft").count()
     linkedin_today = ContactLog.objects.filter(
         campaign_prospect__campaign=campaign, channel="linkedin", contacted_at__date=today,
     ).count()
-    email_total = EmailSend.objects.filter(campaign_prospect__campaign=campaign).exclude(status="draft").count()
+    email_total = EmailSend.objects.filter(campaign_prospect__campaign=campaign, is_test=False).exclude(status="draft").count()
     linkedin_total = ContactLog.objects.filter(campaign_prospect__campaign=campaign, channel="linkedin").count()
     return email_today + linkedin_today, email_total + linkedin_total
 
@@ -332,7 +341,7 @@ def _execute_step(campaign_prospect, step, now, linkedin_provider):
 
             frozen_content = {
                 "subject": planned.subject, "html_body": planned.html_body,
-                "text_body": planned.text_body, "open_tracking_token": planned.open_tracking_token,
+                "text_body": planned.text_body,
             }
 
         record = send_predictneed_campaign_email(campaign_prospect, email_step=step, email_variant=variant, frozen_content=frozen_content, now=now)

@@ -833,6 +833,10 @@ class EmailAutomationSettings(models.Model):
     new_contacts_per_day = models.PositiveSmallIntegerField(default=5)
     daily_total_limit = models.PositiveSmallIntegerField(default=10)
     active = models.BooleanField(default=True)
+    last_seen_uid = models.PositiveIntegerField(
+        default=0,
+        help_text="Dernier UID IMAP déjà balayé (curseur best-effort) — 0 force un SEARCH ALL complet.",
+    )
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 
@@ -862,8 +866,13 @@ class PlannedEmailContent(models.Model):
     subject = models.CharField(max_length=255)
     html_body = models.TextField()
     text_body = models.TextField()
-    content_hash = models.CharField(max_length=64, help_text="Empreinte du rendu au moment de la validation, pour détecter un contenu devenu obsolète.")
-    open_tracking_token = models.CharField(max_length=64, blank=True, help_text="Token du pixel d'ouverture déjà intégré dans html_body — recopié sur EmailSend à l'envoi réel.")
+    content_hash = models.CharField(max_length=64, help_text="Empreinte du rendu (contenu visible, sans pixel) au moment de la préparation.")
+
+    tested_content_hash = models.CharField(
+        max_length=64, blank=True,
+        help_text="content_hash au moment du dernier test EmailSend réussi. La validation exige tested_content_hash == content_hash.",
+    )
+    test_sent_at = models.DateTimeField(null=True, blank=True, help_text="Horodatage du dernier test EmailSend réussi pour ce contenu.")
 
     scheduled_date = models.DateField(help_text="Jour ouvré prévu (déjà ajusté week-end).")
 
@@ -895,9 +904,17 @@ class ProcessedInboundMessage(models.Model):
     inspectés. L'idempotence vient ENTIÈREMENT de cette table, jamais du
     drapeau \\Seen de la boîte : poll_inbound_replies() ouvre la boîte en
     lecture seule et ne modifie jamais son état côté serveur."""
+    STATUS = [
+        ("pending", "En attente de traitement"),
+        ("processing", "En cours de traitement"),
+        ("processed", "Traité"),
+        ("failed", "Échec (réessayable)"),
+    ]
     message_id = models.CharField(max_length=255, unique=True, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS, default="pending", db_index=True)
     result = models.CharField(max_length=30, blank=True)
     processed_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.message_id

@@ -379,8 +379,19 @@ def campaign_create(request):
             # séquence choisie que si le formulaire l'a laissée vide —
             # avant ce correctif, toute sélection était systématiquement
             # écrasée par la séquence e-mail par défaut.
+            #
+            # Section 3 (audit correctif final) : une campagne Planning sans
+            # séquence explicite ne doit JAMAIS tomber silencieusement sur la
+            # séquence legacy 3 étapes 0/4/8 (get_or_create_default_sequence)
+            # — elle reçoit directement une séquence dédiée, déjà garantie
+            # 4 étapes J0/J4/J8/J14. Les campagnes manuelles gardent
+            # exactement leur comportement historique.
             if not campaign.sequence_id:
-                campaign.sequence = get_or_create_default_sequence(campaign.product, campaign.icp)
+                if campaign.planning_managed:
+                    from .services.email_automation import get_or_create_planning_default_sequence
+                    campaign.sequence = get_or_create_planning_default_sequence(campaign.product, campaign.icp)
+                else:
+                    campaign.sequence = get_or_create_default_sequence(campaign.product, campaign.icp)
             campaign.save()
 
             # Section 2.B (correctif automatisation) — garde-fou réel avant
@@ -728,10 +739,18 @@ def email_planning_prepare_week(request):
 def email_planning_send_tests(request):
     """Envoie chaque contenu « à valider »/« modifié » en mode test UNIQUEMENT
     vers l'adresse de test contrôlée — EXACTEMENT le contenu déjà préparé
-    (correctif audit, section 3 : jamais un nouveau rendu). Ne compte jamais
-    comme premier contact commercial, ne crée aucun engagement commercial."""
+    (correctif audit, section 3 : jamais un nouveau rendu ; JAMAIS de pixel
+    d'ouverture, section 5). Ne compte jamais comme premier contact
+    commercial, ne crée aucun engagement commercial.
+
+    Section 4 (audit correctif final) : un test réussi ICI est ce qui
+    autorise ensuite « Valider et programmer » — send_test_email() marque
+    `tested_content_hash`/`test_sent_at` sur `planned` uniquement si l'envoi
+    a réellement abouti."""
     if request.method != "POST":
         return redirect("email_planning")
+
+    from .services.email_automation import send_test_email
 
     test_recipient = settings.EMAIL_HOST_USER or "contact-predict@predictneed-ia.com"
     campaigns = Campaign.objects.filter(planning_managed=True)
@@ -739,14 +758,7 @@ def email_planning_send_tests(request):
     for planned in PlannedEmailContent.objects.filter(
         campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
     ).select_related("campaign_prospect", "email_step"):
-        frozen_content = {
-            "subject": planned.subject, "html_body": planned.html_body,
-            "text_body": planned.text_body, "open_tracking_token": planned.open_tracking_token,
-        }
-        record = send_predictneed_campaign_email(
-            planned.campaign_prospect, email_step=planned.email_step,
-            is_test=True, test_recipient=test_recipient, frozen_content=frozen_content,
-        )
+        record = send_test_email(planned.campaign_prospect, planned, test_recipient, request=request)
         if record.status == "sent":
             sent += 1
 
@@ -760,7 +772,13 @@ def email_planning_validate_and_schedule(request):
     (qui/quand/quel contenu) sur EXACTEMENT le contenu déjà préparé/testé,
     jamais un nouveau rendu (correctif audit, section 3). Si les données
     source du prospect ont changé depuis « Préparer », le contenu passe
-    `stale` et n'est pas validé — il faut relancer « Préparer »."""
+    `stale` et n'est pas validé — il faut relancer « Préparer ».
+
+    Section 4 (audit correctif final) : un POST direct sur cette vue, sans
+    qu'un test réussi ait eu lieu sur EXACTEMENT ce contenu, est TOUJOURS
+    refusé ici — validate_planned_content() vérifie
+    tested_content_hash == content_hash côté serveur, jamais seulement côté
+    interface."""
     if request.method != "POST":
         return redirect("email_planning")
 
@@ -769,17 +787,23 @@ def email_planning_validate_and_schedule(request):
     campaigns = Campaign.objects.filter(planning_managed=True)
     validated_count = 0
     stale_count = 0
+    test_required_count = 0
     for planned in PlannedEmailContent.objects.filter(
         campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
     ).select_related("campaign_prospect", "email_step"):
-        if validate_planned_content(planned, request.user):
+        ok, reason = validate_planned_content(planned, request.user)
+        if ok:
             validated_count += 1
+        elif reason == "test_required":
+            test_required_count += 1
         else:
             stale_count += 1
 
     messages.success(request, f"{validated_count} étape(s) validée(s) et programmée(s) par {request.user.username}.")
     if stale_count:
         messages.warning(request, f"{stale_count} étape(s) écartée(s) : contenu devenu obsolète depuis la préparation — relance « Préparer » pour ces prospects.")
+    if test_required_count:
+        messages.warning(request, f"{test_required_count} étape(s) écartée(s) : envoie d'abord un test réussi sur ce contenu (« Envoyer les tests ») avant de valider.")
     return redirect("email_planning")
 
 

@@ -19,6 +19,7 @@ import os
 import re
 from email.utils import getaddresses
 
+from django.db import transaction
 from django.utils import timezone
 
 from ..models import ContactLog, EmailSend, EngagementEvent, ProcessedInboundMessage
@@ -60,10 +61,23 @@ def match_email_send_for_reply(in_reply_to, references, from_addr, subject):
     return None
 
 
-def process_inbound_message(msg):
+def process_inbound_message(msg, message_identity=None):
     """Traite un message déjà parsé (email.message.Message) — aucune
     logique réseau ici, entièrement testable avec des messages construits
-    à la main."""
+    à la main.
+
+    `message_identity` (section 7, audit correctif final) : quand fourni
+    (cas réel, depuis poll_inbound_replies), la création de l'EngagementEvent
+    devient elle-même le verrou d'idempotence ATOMIQUE — via
+    EngagementEvent.idempotency_key, contrainte unique en base — en plus du
+    registre ProcessedInboundMessage. Ceinture ET bretelles : même si un
+    crash survient entre la « réclamation » du message côté registre et la
+    fin de son traitement (forçant une reprise sur le même message), ce
+    message ne peut jamais produire un second ContactLog/EngagementEvent —
+    la création reste conditionnée à get_or_create() sur idempotency_key,
+    correct même si le registre applicatif était dans un état incohérent.
+    Sans `message_identity` (appel direct historique, tests unitaires),
+    comportement inchangé : toujours créé."""
     in_reply_to = msg.get("In-Reply-To", "")
     references = msg.get("References", "")
     from_header = msg.get("From", "")
@@ -78,6 +92,21 @@ def process_inbound_message(msg):
     prospect = record.prospect
     now = timezone.now()
 
+    event_defaults = {
+        "campaign_prospect": record.campaign_prospect, "prospect": prospect,
+        "campaign": record.campaign_prospect.campaign if record.campaign_prospect else None,
+        "event_type": "email_replied", "source": "prospectpilot",
+        "metadata": {"email_send_id": record.pk},
+    }
+    if message_identity:
+        _event, created = EngagementEvent.objects.get_or_create(
+            idempotency_key=f"inbound-reply:{message_identity}", defaults=event_defaults,
+        )
+        if not created:
+            return {"action": "already_recorded", "prospect_id": prospect.pk, "email_send_id": record.pk}
+    else:
+        EngagementEvent.objects.create(**event_defaults)
+
     prospect.last_replied_at = now
     if prospect.status != "do_not_contact":
         prospect.status = "replied"
@@ -85,20 +114,16 @@ def process_inbound_message(msg):
 
     # Déclenche l'arrêt de séquence existant (stop_on_reply déjà lu depuis
     # ContactLog.outcome="replied" par campaign_sequencing.py::_stop_reason)
-    # — aucune deuxième logique d'arrêt créée ici.
+    # — aucune deuxième logique d'arrêt créée ici. Créé SEULEMENT dans la
+    # branche où l'EngagementEvent vient d'être créé (ci-dessus) : une
+    # reprise après crash sur un message déjà réellement traité ne
+    # duplique donc jamais ce ContactLog.
     ContactLog.objects.create(
         prospect=prospect, channel="email",
         subject=subject or "(sans objet)",
         message="Réponse reçue (détection IMAP automatique).",
         outcome="replied",
         campaign_prospect=record.campaign_prospect,
-    )
-
-    EngagementEvent.objects.create(
-        campaign_prospect=record.campaign_prospect, prospect=prospect,
-        campaign=record.campaign_prospect.campaign if record.campaign_prospect else None,
-        event_type="email_replied", source="prospectpilot",
-        metadata={"email_send_id": record.pk},
     )
 
     return {"action": "matched", "prospect_id": prospect.pk, "email_send_id": record.pk}
@@ -126,13 +151,24 @@ def poll_inbound_replies():
     - `FETCH BODY.PEEK[]` (jamais `RFC822`, qui marque implicitement \\Seen
       sur de nombreux serveurs) ;
     - aucun `STORE` n'est jamais appelé.
-    L'idempotence vient ENTIÈREMENT du registre applicatif
-    `ProcessedInboundMessage` (clé = Message-ID), jamais de \\Seen/UNSEEN :
-    un même message n'est donc jamais retraité, même après crash/redémarrage
-    ou double polling, et les messages non pertinents ne sont jamais
-    réinspectés indéfiniment. Ne répond jamais au prospect. Si les
-    identifiants ne sont pas configurés, ne tente aucune connexion —
-    comportement dormant, pas une erreur."""
+    Ne répond jamais au prospect. Si les identifiants ne sont pas
+    configurés, ne tente aucune connexion — comportement dormant, pas une
+    erreur.
+
+    Correctif (section 7, audit correctif final) — idempotence résistante
+    aux crashes : `ProcessedInboundMessage.status` est un vrai état
+    (pending -> processing -> processed/failed), pas une simple ligne dont
+    la seule EXISTENCE vaudrait « déjà traité ». Un crash entre la
+    « réclamation » (passage à `processing`) et la fin du traitement laisse
+    le message dans un état RÉESSAYABLE au prochain poll (jamais
+    `processed`), donc jamais silencieusement perdu. La réclamation est
+    faite sous verrou (select_for_update, sans effet sur SQLite qui ne le
+    supporte pas — dégrade proprement en SELECT simple, comme partout
+    ailleurs dans ce projet) pour rester correcte même si deux pollers
+    tournaient en parallèle. Une fois RÉELLEMENT `processed`, un double
+    polling ne crée toujours jamais de doublon (voir aussi le verrou
+    ceinture-et-bretelles dans process_inbound_message via
+    EngagementEvent.idempotency_key)."""
     settings_ = _imap_settings()
     if not settings_["host"] or not settings_["user"] or not settings_["password"]:
         return {"action": "imap_not_configured", "results": []}
@@ -153,16 +189,34 @@ def poll_inbound_replies():
             msg = email.message_from_bytes(raw_email)
 
             message_identity = _message_identity(msg)
-            _registry_row, created = ProcessedInboundMessage.objects.get_or_create(message_id=message_identity)
-            if not created:
-                results.append({"action": "already_processed", "message_id": message_identity})
+
+            with transaction.atomic():
+                registry_row, created = ProcessedInboundMessage.objects.select_for_update().get_or_create(
+                    message_id=message_identity, defaults={"status": "processing"},
+                )
+                if not created:
+                    if registry_row.status == "processed":
+                        results.append({"action": "already_processed", "message_id": message_identity})
+                        continue
+                    # pending/processing/failed laissé par un crash ou un
+                    # message non reconnu précédent -> nouvelle tentative.
+                    registry_row.status = "processing"
+                    registry_row.save(update_fields=["status", "updated_at"])
+
+            try:
+                result = process_inbound_message(msg, message_identity=message_identity)
+            except Exception as exc:
+                registry_row.status = "failed"
+                registry_row.result = f"error: {exc}"[:30]
+                registry_row.save(update_fields=["status", "result", "updated_at"])
+                results.append({"action": "processing_error", "message_id": message_identity})
                 continue
 
-            result = process_inbound_message(msg)
             result["message_id"] = message_identity
             results.append(result)
-            _registry_row.result = result["action"]
-            _registry_row.save(update_fields=["result"])
+            registry_row.status = "processed"
+            registry_row.result = result["action"]
+            registry_row.save(update_fields=["status", "result", "updated_at"])
     finally:
         try:
             conn.logout()

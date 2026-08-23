@@ -38,10 +38,12 @@ from prospects.services.campaign_sequencing import advance_campaign_prospect
 from prospects.services.email_automation import (
     adopt_campaign_into_planning,
     build_week_plan,
-    ensure_four_step_sequence,
+    clone_sequence_for_campaign,
     finalize_failed_send,
     has_prior_commercial_first_contact,
+    normalize_planning_sequence,
     prepare_planned_content,
+    send_test_email,
     smtp_retry_allowed,
     SMTP_BACKOFF_MINUTES,
     SMTP_MAX_ATTEMPTS,
@@ -52,6 +54,33 @@ from prospects.services.predictneed_email import send_predictneed_campaign_email
 
 from .factories import make_campaign, make_compliance_profile, make_icp, make_product, make_prospect, make_public_email
 from .test_mission8_email_automation import make_j0_j4_j8_j14_sequence, make_planning_campaign
+
+
+def _validate_after_test(planned, user=None):
+    """Section 4 (audit correctif final) : validate_planned_content() exige
+    désormais un test réussi sur EXACTEMENT ce contenu avant d'autoriser la
+    validation. Helper de test — emprunte le vrai chemin d'envoi (is_test
+    envoyé vers l'adresse d'expédition du produit), pas un raccourci qui
+    contournerait la vérification serveur elle-même."""
+    campaign_prospect = planned.campaign_prospect
+    send_test_email(campaign_prospect, planned, campaign_prospect.campaign.product.sender_email)
+    planned.refresh_from_db()
+    return validate_planned_content(planned, user)
+
+
+def make_legacy_three_step_0_4_8_sequence(product, icp):
+    """Reproduit EXACTEMENT campaign_sending.get_or_create_default_sequence()
+    — delay_days stockés 0/4/8, dont le cumulatif RÉEL (delay_days relatif à
+    l'étape précédente) est 0/4/12, pas 0/4/8 (c'est précisément le bug visé
+    par la section 1 : le J8 legacy tombe en réalité à J12)."""
+    sequence = EmailSequence.objects.create(product=product, icp=icp, name="Legacy 0/4/8 (reconstruction réelle)")
+    step1 = EmailStep.objects.create(sequence=sequence, order=1, delay_days=0, name="Premier contact", channel="email")
+    EmailVariant.objects.create(step=step1, name="Standard", subject_template="{{ company_name }} — observation", cta_type="simulator")
+    step2 = EmailStep.objects.create(sequence=sequence, order=2, delay_days=4, name="Rappel court", channel="email")
+    EmailVariant.objects.create(step=step2, name="Standard", subject_template="{{ company_name }} — comportement des visiteurs", cta_type="simulator")
+    step3 = EmailStep.objects.create(sequence=sequence, order=3, delay_days=8, name="Dernier message", channel="email")
+    EmailVariant.objects.create(step=step3, name="Standard", subject_template="{{ company_name }} — comportement des visiteurs", cta_type="simulator")
+    return sequence
 
 
 def make_legacy_single_step_campaign(product, icp, subject="J0 personnalisé — {{ company_name }}"):
@@ -133,7 +162,7 @@ class AdoptionOfExistingCampaignsTests(TestCase):
         # Nouvelle validation humaine explicite (simulée) pour J0.
         step1 = campaign.sequence.steps.get(order=1)
         planned_j0 = prepare_planned_content(member, step1, timezone.now().date())
-        validate_planned_content(planned_j0, None)
+        _validate_after_test(planned_j0, None)
         campaign.status = "ready"
         campaign.validated_at = timezone.now()
         campaign.save(update_fields=["status", "validated_at"])
@@ -148,7 +177,7 @@ class AdoptionOfExistingCampaignsTests(TestCase):
         later = timezone.now() + datetime.timedelta(days=5)
         step2 = campaign.sequence.steps.get(order=2)
         planned_j4 = prepare_planned_content(member, step2, later.date())
-        validate_planned_content(planned_j4, None)
+        _validate_after_test(planned_j4, None)
         member.current_step_started_at = timezone.now() - datetime.timedelta(days=10)
         member.save(update_fields=["current_step_started_at"])
 
@@ -194,7 +223,7 @@ class AdoptionOfExistingCampaignsTests(TestCase):
         other_step1 = other_campaign.sequence.steps.get(order=1)
         other_member = CampaignProspect.objects.create(campaign=other_campaign, prospect=prospect, status="ready_to_contact")
         planned = prepare_planned_content(other_member, other_step1, timezone.now().date())
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
         advance_campaign_prospect(other_member.pk)
         self.assertTrue(has_prior_commercial_first_contact(prospect))
 
@@ -206,12 +235,12 @@ class AdoptionOfExistingCampaignsTests(TestCase):
         self.assertEqual(campaign.total_limit, 1)
         self.assertEqual(campaign.sequence.steps.count(), 1)
 
-    def test_ensure_four_step_sequence_is_additive_only(self):
+    def test_normalize_planning_sequence_adds_missing_steps_and_preserves_j0_subject(self):
         sequence = EmailSequence.objects.create(product=self.product, icp=self.icp, name="Partial")
         step1 = EmailStep.objects.create(sequence=sequence, order=1, delay_days=0, name="J0", channel="email")
         variant = EmailVariant.objects.create(step=step1, name="J0", subject_template="Custom J0 subject", cta_type="simulator")
 
-        ensure_four_step_sequence(sequence)
+        normalize_planning_sequence(sequence)
 
         self.assertEqual(sequence.steps.count(), 4)
         step1.refresh_from_db()
@@ -220,6 +249,83 @@ class AdoptionOfExistingCampaignsTests(TestCase):
         for order in (2, 3, 4):
             step = sequence.steps.get(order=order)
             self.assertTrue(step.variants.exists())
+
+    def test_normalize_planning_sequence_fixes_real_legacy_0_4_8_delays_to_0_4_4_6(self):
+        """Section 1 — la séquence legacy réelle (get_or_create_default_sequence)
+        stocke delay_days 0/4/8, dont le cumulatif RÉEL est 0/4/12 (delay_days
+        est relatif à l'étape précédente), pas 0/4/8. normalize_planning_sequence
+        doit corriger l'étape 3 existante (8 -> 4) et ajouter la 4e étape
+        (delay_days=6), jamais seulement ajouter ce qui manque."""
+        sequence = make_legacy_three_step_0_4_8_sequence(self.product, self.icp)
+        original_step1_pk = sequence.steps.get(order=1).pk
+        original_variant1 = sequence.steps.get(order=1).variants.first()
+        original_subject = original_variant1.subject_template
+
+        normalize_planning_sequence(sequence)
+
+        steps = list(sequence.steps.order_by("order"))
+        self.assertEqual(len(steps), 4)
+        self.assertEqual([s.order for s in steps], [1, 2, 3, 4])
+        self.assertEqual([s.delay_days for s in steps], [0, 4, 4, 6])
+        # J0 jamais touché (ni l'étape ni son sujet personnalisé).
+        self.assertEqual(steps[0].pk, original_step1_pk)
+        original_variant1.refresh_from_db()
+        self.assertEqual(original_variant1.subject_template, original_subject)
+
+    def test_clone_sequence_for_campaign_never_mutates_the_original(self):
+        """Section 2 — deux campagnes partagent la même séquence legacy ;
+        adopter la campagne A ne doit JAMAIS modifier la séquence utilisée
+        par la campagne B, qui doit rester strictement byte pour byte
+        inchangée (mêmes pk d'étapes/variants, mêmes delay_days, même
+        sujet)."""
+        shared_sequence = make_legacy_three_step_0_4_8_sequence(self.product, self.icp)
+        campaign_a = Campaign.objects.create(
+            name="Partagee A", product=self.product, icp=self.icp, sequence=shared_sequence,
+            status="ready", validated_at=timezone.now() - datetime.timedelta(days=2),
+            daily_send_limit=1, total_limit=1, planning_managed=False,
+        )
+        campaign_b = Campaign.objects.create(
+            name="Partagee B", product=self.product, icp=self.icp, sequence=shared_sequence,
+            status="ready", validated_at=timezone.now() - datetime.timedelta(days=2),
+            daily_send_limit=1, total_limit=1, planning_managed=False,
+        )
+        b_steps_before = list(shared_sequence.steps.order_by("order").values("pk", "order", "delay_days"))
+        b_variant_before = shared_sequence.steps.get(order=1).variants.first().subject_template
+
+        adopt_campaign_into_planning(campaign_a)
+        campaign_a.refresh_from_db()
+        campaign_b.refresh_from_db()
+
+        # A a bien reçu une séquence à part, jamais la séquence partagée elle-même.
+        self.assertNotEqual(campaign_a.sequence_id, shared_sequence.pk)
+        self.assertEqual(campaign_a.sequence.steps.count(), 4)
+
+        # B référence toujours EXACTEMENT la même séquence, elle-même inchangée.
+        self.assertEqual(campaign_b.sequence_id, shared_sequence.pk)
+        shared_sequence.refresh_from_db()
+        b_steps_after = list(shared_sequence.steps.order_by("order").values("pk", "order", "delay_days"))
+        self.assertEqual(b_steps_before, b_steps_after)
+        self.assertEqual(shared_sequence.steps.count(), 3)  # jamais complétée à 4
+        self.assertEqual(shared_sequence.steps.get(order=1).variants.first().subject_template, b_variant_before)
+
+    def test_clone_sequence_for_campaign_is_a_deep_copy(self):
+        sequence = make_legacy_three_step_0_4_8_sequence(self.product, self.icp)
+        campaign = Campaign.objects.create(
+            name="Cible clone", product=self.product, icp=self.icp, sequence=sequence,
+            status="draft", daily_send_limit=1, total_limit=1, planning_managed=False,
+        )
+        clone = clone_sequence_for_campaign(sequence, campaign)
+
+        self.assertNotEqual(clone.pk, sequence.pk)
+        self.assertEqual(clone.steps.count(), sequence.steps.count())
+        for original_step in sequence.steps.all():
+            cloned_step = clone.steps.get(order=original_step.order)
+            self.assertNotEqual(cloned_step.pk, original_step.pk)
+            self.assertEqual(cloned_step.delay_days, original_step.delay_days)
+            self.assertEqual(
+                cloned_step.variants.first().subject_template,
+                original_step.variants.first().subject_template,
+            )
 
 
 class CentralizedAntiDuplicateIntegrationTests(TestCase):
@@ -238,7 +344,7 @@ class CentralizedAntiDuplicateIntegrationTests(TestCase):
         step1 = campaign.sequence.steps.get(order=1)
         member = CampaignProspect.objects.create(campaign=campaign, prospect=prospect, status="ready_to_contact")
         planned = prepare_planned_content(member, step1, timezone.now().date())
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
         result = advance_campaign_prospect(member.pk)
         self.assertEqual(result["action"], "email")
 
@@ -302,7 +408,7 @@ class CentralizedAntiDuplicateIntegrationTests(TestCase):
         step1 = other_campaign.sequence.steps.get(order=1)
         member = CampaignProspect.objects.create(campaign=other_campaign, prospect=contacted, status="ready_to_contact")
         planned = prepare_planned_content(member, step1, timezone.now().date())
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
 
         result = advance_campaign_prospect(member.pk)
         self.assertEqual(result["action"], "blocked_duplicate_first_contact")
@@ -326,27 +432,27 @@ class SingleRenderWorkflowTests(TestCase):
         planned = prepare_planned_content(self.member, self.step1, timezone.now().date())
         prepared_subject, prepared_html, prepared_text = planned.subject, planned.html_body, planned.text_body
 
-        test_record = send_predictneed_campaign_email(
-            self.member, email_step=self.step1, is_test=True, test_recipient="contact-predict@predictneed-ia.com",
-            frozen_content={
-                "subject": planned.subject, "html_body": planned.html_body,
-                "text_body": planned.text_body, "open_tracking_token": planned.open_tracking_token,
-            },
-        )
+        test_record = send_test_email(self.member, planned, "contact-predict@predictneed-ia.com")
         self.assertEqual(test_record.status, "sent")
 
-        validate_planned_content(planned, None)
+        planned.refresh_from_db()
+        ok, reason = validate_planned_content(planned, None)
+        self.assertTrue(ok, reason)
         commercial_result = advance_campaign_prospect(self.member.pk)
         self.assertEqual(commercial_result["action"], "email")
         commercial_record = EmailSend.objects.filter(campaign_prospect=self.member, is_test=False).latest("id")
 
-        # Sujet/HTML/texte strictement identiques entre test et commercial,
-        # eux-mêmes identiques à ce qui a été préparé — jamais régénérés.
+        # Sujet/texte strictement identiques entre test et commercial, eux-
+        # mêmes identiques à ce qui a été préparé — jamais régénérés. Le HTML
+        # commercial est le HTML de test AVEC le pixel d'ouverture en plus
+        # (section 5 : jamais de pixel dans le test, injecté seulement au
+        # moment du vrai envoi).
+        from prospects.services.predictneed_email import inject_open_pixel
         self.assertEqual(test_record.subject.removeprefix("[TEST] "), commercial_record.subject)
-        self.assertEqual(test_record.html_body, commercial_record.html_body)
         self.assertEqual(test_record.text_body, commercial_record.text_body)
+        self.assertEqual(test_record.html_body, prepared_html)
+        self.assertEqual(commercial_record.html_body, inject_open_pixel(prepared_html, commercial_record.open_tracking_token))
         self.assertEqual(commercial_record.subject, prepared_subject)
-        self.assertEqual(commercial_record.html_body, prepared_html)
         self.assertEqual(commercial_record.text_body, prepared_text)
 
     def test_validate_never_rewrites_the_prepared_content(self):
@@ -355,7 +461,7 @@ class SingleRenderWorkflowTests(TestCase):
         html_after_prepare = planned.html_body
         text_after_prepare = planned.text_body
 
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
         planned.refresh_from_db()
 
         self.assertEqual(planned.subject, subject_after_prepare)
@@ -368,8 +474,9 @@ class SingleRenderWorkflowTests(TestCase):
         self.prospect.name = "Nom Change Apres Preparation"
         self.prospect.save(update_fields=["name"])
 
-        validated = validate_planned_content(planned, None)
+        validated, reason = validate_planned_content(planned, None)
         self.assertFalse(validated)
+        self.assertEqual(reason, "stale")
         planned.refresh_from_db()
         self.assertEqual(planned.status, "stale")
 
@@ -388,8 +495,8 @@ class SingleRenderWorkflowTests(TestCase):
         self.assertEqual(planned2.status, "to_validate")
         self.assertIn("Nom Change", planned2.subject if "company_name" not in planned2.subject else planned2.html_body)
 
-        validated = validate_planned_content(planned2, None)
-        self.assertTrue(validated)
+        validated, reason = _validate_after_test(planned2, None)
+        self.assertTrue(validated, reason)
 
 
 class RealWeeklySlotAssignmentTests(TestCase):
@@ -443,7 +550,7 @@ class RealWeeklySlotAssignmentTests(TestCase):
         tuesday = datetime.date(2026, 8, 25)
         prepare_planned_content(cp, step1, tuesday)
         planned = PlannedEmailContent.objects.get(campaign_prospect=cp, email_step=step1)
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
 
         result = advance_campaign_prospect(cp.pk, now=self.monday)
         self.assertEqual(result["action"], "deferred_not_yet_due")
@@ -454,7 +561,7 @@ class RealWeeklySlotAssignmentTests(TestCase):
         step1 = cp.campaign.sequence.steps.get(order=1)
         prepare_planned_content(cp, step1, datetime.date(2026, 8, 24))
         planned = PlannedEmailContent.objects.get(campaign_prospect=cp, email_step=step1)
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
 
         tuesday_now = datetime.datetime(2026, 8, 25, 8, 0, tzinfo=datetime.timezone.utc)
         result = advance_campaign_prospect(cp.pk, now=tuesday_now)
@@ -469,7 +576,7 @@ class RealWeeklySlotAssignmentTests(TestCase):
         yesterday = datetime.date(2026, 8, 21)  # vendredi précédent
         prepare_planned_content(cp, step1, yesterday)
         planned = PlannedEmailContent.objects.get(campaign_prospect=cp, email_step=step1)
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
 
         result = advance_campaign_prospect(cp.pk, now=self.monday)
         self.assertEqual(result["action"], "email")
@@ -488,7 +595,7 @@ class ImapNeverTouchesSeenAndIsIdempotentTests(TestCase):
         self.member = CampaignProspect.objects.create(campaign=self.campaign, prospect=self.prospect, status="ready_to_contact")
         step1 = self.campaign.sequence.steps.get(order=1)
         planned = prepare_planned_content(self.member, step1, timezone.now().date())
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
         advance_campaign_prospect(self.member.pk)
         self.record = EmailSend.objects.filter(campaign_prospect=self.member, is_test=False).latest("id")
 
@@ -611,7 +718,7 @@ class SMTPRetryBackoffTests(TestCase):
         self.member = CampaignProspect.objects.create(campaign=self.campaign, prospect=self.prospect, status="ready_to_contact")
         self.step1 = self.campaign.sequence.steps.get(order=1)
         planned = prepare_planned_content(self.member, self.step1, timezone.now().date())
-        validate_planned_content(planned, None)
+        _validate_after_test(planned, None)
 
     def test_first_failure_sets_backoff_next_retry_at(self):
         with mock.patch("django.core.mail.EmailMultiAlternatives.send", side_effect=RuntimeError("SMTP down")):
