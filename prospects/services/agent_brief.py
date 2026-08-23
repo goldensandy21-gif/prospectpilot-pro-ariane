@@ -24,6 +24,17 @@ def _contact_recommendation(prospect):
     return email.email, reason
 
 
+# Quality gate (audit correctif) — ces deux textes sont des messages de
+# repli INTERNES, écrits pour un opérateur qui relit un AgentBrief (ils
+# expliquent honnêtement qu'aucun signal spécifique n'a été confirmé) —
+# jamais destinés à apparaître tels quels dans un e-mail reçu par un
+# prospect. predictneed_email.py les détecte via ces constantes pour omettre
+# proprement le bloc "problème détecté" plutôt que de les afficher (voir
+# _is_internal_fallback_need ci-dessous et son usage dans build_predictneed_context).
+GENERIC_FALLBACK_NEED_PREFIX = "Aucun signal spécifique confirmé chez ce prospect."
+INSUFFICIENT_SIGNAL_NEED_TEXT = "Signaux insuffisants pour formuler un besoin détecté précis."
+
+
 def _detected_need(prospect, product):
     """Correctif d'audit (section 16) : `product.target_problem` est un
     énoncé GÉNÉRIQUE au niveau du produit — il ne doit jamais être présenté
@@ -38,10 +49,10 @@ def _detected_need(prospect, product):
         return f"Signaux observés chez ce prospect pouvant indiquer un besoin : {labels}."
     if product and product.target_problem:
         return (
-            f"Aucun signal spécifique confirmé chez ce prospect. Problème générique "
+            f"{GENERIC_FALLBACK_NEED_PREFIX} Problème générique "
             f"adressé par {product.name} : {product.target_problem}"
         )
-    return "Signaux insuffisants pour formuler un besoin détecté précis."
+    return INSUFFICIENT_SIGNAL_NEED_TEXT
 
 
 def _recommended_angle(prospect, competitor_detections):

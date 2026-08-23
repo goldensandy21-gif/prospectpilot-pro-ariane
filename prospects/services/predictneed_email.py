@@ -15,6 +15,7 @@ from django.template import Context, Template
 from django.utils import timezone
 
 from ..models import ContactLog, EmailSend, EngagementEvent
+from .agent_brief import GENERIC_FALLBACK_NEED_PREFIX, INSUFFICIENT_SIGNAL_NEED_TEXT
 from .compliance_footer import render_compliance_footer_html, render_compliance_footer_text
 from .email_identity import format_from_header, get_sender_identity
 from .suppression import is_suppressed
@@ -66,7 +67,14 @@ BENEFIT_BLOCKS = [
 
 
 def _render(template_str, ctx):
-    return Template(template_str or "").render(Context(ctx)).strip()
+    """Utilisé UNIQUEMENT pour le sujet (render_predictneed_subject) — un
+    sujet SMTP est du texte brut, jamais du HTML : `autoescape=False` évite
+    qu'une apostrophe/esperluette dans un nom d'entreprise (ex: "ACTION'ELLES")
+    ne devienne une entité HTML visible (`ACTION&#x27;ELLES`) dans le sujet
+    reçu par le destinataire. Le corps HTML, lui, échappe déjà explicitement
+    chaque valeur via `escape()` à chaque endroit où elle est insérée — ce
+    changement ne touche jamais cette protection-là."""
+    return Template(template_str or "").render(Context(ctx, autoescape=False)).strip()
 
 
 def _first_name(prospect, email):
@@ -92,6 +100,19 @@ def _secondary_signal_line(agent_brief):
     return agent_brief.relevant_signals[1].get("label", "")
 
 
+def _is_internal_fallback_need(text):
+    """Quality gate (audit correctif) : `AgentBrief.detected_need` porte
+    parfois un message de repli écrit pour un OPÉRATEUR relisant le brief
+    (« Aucun signal spécifique confirmé... », « Signaux insuffisants... »)
+    — jamais destiné à un prospect. Un email commercial ne doit JAMAIS
+    afficher une phrase qui parle du moteur à la 3e personne ou qui admet
+    l'absence de signal. Détecté ici pour que le bloc soit simplement omis
+    (jamais remplacé par une invention) — voir build_predictneed_context."""
+    if not text:
+        return False
+    return text.startswith(GENERIC_FALLBACK_NEED_PREFIX) or text == INSUFFICIENT_SIGNAL_NEED_TEXT
+
+
 def build_predictneed_context(campaign_prospect, email_step=None, email_variant=None, request=None, is_test=False):
     prospect = campaign_prospect.prospect
     campaign = campaign_prospect.campaign
@@ -110,7 +131,11 @@ def build_predictneed_context(campaign_prospect, email_step=None, email_variant=
         "observation": _observation_line(agent_brief),
         "detected_signal": _observation_line(agent_brief),
         "secondary_signal": _secondary_signal_line(agent_brief),
-        "detected_problem": agent_brief.detected_need if agent_brief else "",
+        "detected_problem": (
+            agent_brief.detected_need
+            if agent_brief and not _is_internal_fallback_need(agent_brief.detected_need)
+            else ""
+        ),
         "product_name": product.name,
         "product_url": product.website_url,
         "simulator_url": product.simulator_url,
