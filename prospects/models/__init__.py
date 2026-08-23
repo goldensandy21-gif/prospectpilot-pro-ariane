@@ -37,6 +37,7 @@ from .acquisition import (
     ConversionEvent,
     ICPProfile,
     PlannedEmailContent,
+    ProcessedInboundMessage,
     ProductProfile,
     ProspectSignal,
     ProspectTechnology,

@@ -668,6 +668,7 @@ class EmailSend(models.Model):
         ("queued", "En file"),
         ("sent", "Envoyé"),
         ("failed", "Échec"),
+        ("permanently_failed", "Échec permanent (nombre max de tentatives atteint)"),
         ("blocked", "Bloqué"),
         ("bounced", "Rejeté (bounce)"),
         ("suppressed", "Supprimé (opposition)"),
@@ -698,6 +699,11 @@ class EmailSend(models.Model):
     bounce_reason = models.CharField(max_length=500, blank=True)
     attempt_count = models.PositiveSmallIntegerField(default=0)
     last_attempt_at = models.DateTimeField(null=True, blank=True)
+    # Section 6 (correctif automatisation) — backoff : tant que cette date
+    # n'est pas atteinte, aucune nouvelle tentative pour cette étape précise
+    # (voir services/email_automation.py::smtp_retry_allowed). None = pas
+    # de retry programmé (envoi réussi, ou jamais tenté, ou échec permanent).
+    next_retry_at = models.DateTimeField(null=True, blank=True)
 
     is_test = models.BooleanField(default=False)
 

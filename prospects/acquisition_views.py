@@ -34,7 +34,7 @@ from .services.campaign_sending import get_or_create_default_sequence, send_camp
 from .services.campaign_metrics import annotate_campaigns_with_metrics, campaign_performance_summary
 from .services.campaign_sequencing import _next_step as _sequence_next_step
 from .services.commercial_timeline import build_prospect_timeline
-from .services.email_automation import compute_scheduled_date, freeze_planned_content, mark_stale_if_changed
+from .services.email_automation import mark_stale_if_changed
 from .services.predictneed_email import render_predictneed_email, send_predictneed_campaign_email
 from .services.provenance import get_email_provenance
 from .services.suppression import is_suppressed
@@ -335,6 +335,21 @@ def campaign_create(request):
         qs = qs.filter(predictneed_grade__in=GRADE_FILTERS[grade])
     if min_score.isdigit():
         qs = qs.filter(predictneed_acquisition_score__gte=int(min_score))
+
+    # Section 2.A (correctif automatisation) — pour une création de campagne
+    # destinée au Planning e-mail (?planning=1), un prospect déjà
+    # premier-contacté commercialement (n'importe quelle campagne, verrou
+    # global has_prior_commercial_first_contact) n'apparaît plus parmi les
+    # candidats sélectionnables. La garde-fou réelle et non contournable
+    # (POST forgé y compris) reste le contrôle POST ci-dessous — ce filtre
+    # n'est qu'une aide d'affichage. Doit rester AVANT le slicing [:200]
+    # ci-dessous : Django refuse tout .exclude()/.filter() supplémentaire
+    # sur une QuerySet déjà tranchée.
+    planning_intent = request.GET.get("planning") == "1"
+    if planning_intent:
+        from .services.email_automation import contacted_prospect_ids
+        qs = qs.exclude(pk__in=contacted_prospect_ids())
+
     qs = qs.order_by("-predictneed_acquisition_score")[:200]
 
     empty_state_reasons = None
@@ -367,7 +382,21 @@ def campaign_create(request):
             if not campaign.sequence_id:
                 campaign.sequence = get_or_create_default_sequence(campaign.product, campaign.icp)
             campaign.save()
+
+            # Section 2.B (correctif automatisation) — garde-fou réel avant
+            # inscription, non contournable par un POST forgé/manipulé :
+            # pour une campagne planning_managed, aucun prospect déjà
+            # premier-contacté commercialement (verrou global, historique
+            # EmailSend réel) n'est jamais inscrit comme nouveau
+            # CampaignProspect de premier contact, quelle que soit la liste
+            # envoyée dans la requête.
+            from .services.email_automation import has_prior_commercial_first_contact
+            blocked_prospects = []
+            created_count = 0
             for prospect in Prospect.objects.filter(pk__in=selected_ids):
+                if campaign.planning_managed and has_prior_commercial_first_contact(prospect):
+                    blocked_prospects.append(prospect.name)
+                    continue
                 brief = prospect.agent_briefs.order_by("-generated_at").first()
                 CampaignProspect.objects.get_or_create(
                     campaign=campaign, prospect=prospect,
@@ -379,7 +408,16 @@ def campaign_create(request):
                         "selected_at": timezone.now(),
                     },
                 )
-            messages.success(request, f"Campagne « {campaign.name} » créée en brouillon avec {len(selected_ids)} prospect(s).")
+                created_count += 1
+
+            if blocked_prospects:
+                names = ", ".join(blocked_prospects[:5]) + ("…" if len(blocked_prospects) > 5 else "")
+                messages.warning(
+                    request,
+                    f"{len(blocked_prospects)} prospect(s) déjà contacté(s) commercialement ont été "
+                    f"automatiquement exclus (verrou anti-doublon) : {names}",
+                )
+            messages.success(request, f"Campagne « {campaign.name} » créée en brouillon avec {created_count} prospect(s).")
             return redirect("campaign_detail", pk=campaign.pk)
         messages.error(request, "Sélectionne au moins un prospect et vérifie le formulaire.")
     else:
@@ -659,55 +697,38 @@ def email_planning(request):
 
 @login_required
 def email_planning_prepare_week(request):
-    """« Préparer la semaine » — pour chaque CampaignProspect planning_managed
-    dont la prochaine étape est due (délai écoulé, comme
-    campaign_sequencing.advance_campaign_prospect le vérifierait), crée/
-    rafraîchit une ligne PlannedEmailContent en statut « à valider ». N'envoie
-    rien."""
+    """« Préparer » — correctif audit, sections 3 et 4.
+
+    Une seule version candidate est rendue par étape (prepare_planned_content,
+    jamais régénérée ensuite par le test ou la validation). Les dates sont
+    de vrais créneaux lundi->vendredi : les relances dues sont placées en
+    priorité, les nouveaux premiers contacts remplissent la capacité
+    restante de chaque jour (new_contacts_per_day et daily_total_limit
+    réellement respectés), tout dépassement est reporté au jour ouvré
+    suivant. N'envoie rien."""
     if request.method != "POST":
         return redirect("email_planning")
 
-    campaigns = Campaign.objects.filter(planning_managed=True).select_related("sequence")
+    from .services.email_automation import build_week_plan, prepare_planned_content
+
+    plan = build_week_plan(now=timezone.now())
     count = 0
-    for cp in CampaignProspect.objects.filter(campaign__in=campaigns).exclude(
-        status__in=["do_not_contact", "lost", "paying", "excluded", "churned"],
-    ).select_related("campaign__sequence", "current_step"):
-        sequence = cp.campaign.sequence
-        if not sequence:
-            continue
-        next_step = _sequence_next_step(cp)
-        if next_step is None:
-            continue
-        existing = PlannedEmailContent.objects.filter(campaign_prospect=cp, email_step=next_step).first()
+    for scheduled_date, cp, step in plan:
+        existing = PlannedEmailContent.objects.filter(campaign_prospect=cp, email_step=step).first()
         if existing and existing.status == "validated":
             continue  # déjà validé — ne pas repasser à "à valider" silencieusement
-
-        first_contact_date = (cp.contacted_at or timezone.now()).date()
-        scheduled_date = compute_scheduled_date(first_contact_date, sequence, next_step)
-        variant = next_step.variants.filter(active=True).first()
-        if not variant:
-            continue
-        subject, html, text = render_predictneed_email(cp, next_step, variant, request)
-        from .services.email_automation import content_hash_for
-        PlannedEmailContent.objects.update_or_create(
-            campaign_prospect=cp, email_step=next_step,
-            defaults={
-                "subject": subject, "html_body": html, "text_body": text,
-                "content_hash": content_hash_for(subject, html, text),
-                "scheduled_date": scheduled_date, "status": "to_validate",
-                "approved_by": None, "approved_at": None,
-            },
-        )
+        prepare_planned_content(cp, step, scheduled_date)
         count += 1
 
-    messages.success(request, f"{count} étape(s) préparée(s) — à valider avant tout envoi.")
+    messages.success(request, f"{count} étape(s) préparée(s) et programmée(s) — à valider avant tout envoi.")
     return redirect("email_planning")
 
 
 @login_required
 def email_planning_send_tests(request):
     """Envoie chaque contenu « à valider »/« modifié » en mode test UNIQUEMENT
-    vers l'adresse de test contrôlée — jamais au prospect, ne compte jamais
+    vers l'adresse de test contrôlée — EXACTEMENT le contenu déjà préparé
+    (correctif audit, section 3 : jamais un nouveau rendu). Ne compte jamais
     comme premier contact commercial, ne crée aucun engagement commercial."""
     if request.method != "POST":
         return redirect("email_planning")
@@ -718,36 +739,47 @@ def email_planning_send_tests(request):
     for planned in PlannedEmailContent.objects.filter(
         campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
     ).select_related("campaign_prospect", "email_step"):
-        variant = planned.email_step.variants.filter(active=True).first()
+        frozen_content = {
+            "subject": planned.subject, "html_body": planned.html_body,
+            "text_body": planned.text_body, "open_tracking_token": planned.open_tracking_token,
+        }
         record = send_predictneed_campaign_email(
-            planned.campaign_prospect, email_step=planned.email_step, email_variant=variant,
-            is_test=True, test_recipient=test_recipient,
+            planned.campaign_prospect, email_step=planned.email_step,
+            is_test=True, test_recipient=test_recipient, frozen_content=frozen_content,
         )
         if record.status == "sent":
             sent += 1
 
-    messages.success(request, f"{sent} e-mail(s) de test envoyé(s) à {test_recipient}. Aucun envoi commercial.")
+    messages.success(request, f"{sent} e-mail(s) de test envoyé(s) à {test_recipient} — contenu identique à celui qui serait validé. Aucun envoi commercial.")
     return redirect("email_planning")
 
 
 @login_required
 def email_planning_validate_and_schedule(request):
     """« Valider et programmer la semaine » — trace d'approbation explicite
-    (qui/quand/quel contenu) et fige le contenu réellement envoyé plus tard.
-    Seule cette action fait passer un PlannedEmailContent à "validated" ;
-    sans elle, le scheduler automatisé (section F) n'envoie jamais rien."""
+    (qui/quand/quel contenu) sur EXACTEMENT le contenu déjà préparé/testé,
+    jamais un nouveau rendu (correctif audit, section 3). Si les données
+    source du prospect ont changé depuis « Préparer », le contenu passe
+    `stale` et n'est pas validé — il faut relancer « Préparer »."""
     if request.method != "POST":
         return redirect("email_planning")
 
+    from .services.email_automation import validate_planned_content
+
     campaigns = Campaign.objects.filter(planning_managed=True)
-    count = 0
+    validated_count = 0
+    stale_count = 0
     for planned in PlannedEmailContent.objects.filter(
         campaign_prospect__campaign__in=campaigns, status__in=["to_validate", "stale"],
     ).select_related("campaign_prospect", "email_step"):
-        freeze_planned_content(planned.campaign_prospect, planned.email_step, request.user, planned.scheduled_date)
-        count += 1
+        if validate_planned_content(planned, request.user):
+            validated_count += 1
+        else:
+            stale_count += 1
 
-    messages.success(request, f"{count} étape(s) validée(s) et programmée(s) par {request.user.username}.")
+    messages.success(request, f"{validated_count} étape(s) validée(s) et programmée(s) par {request.user.username}.")
+    if stale_count:
+        messages.warning(request, f"{stale_count} étape(s) écartée(s) : contenu devenu obsolète depuis la préparation — relance « Préparer » pour ces prospects.")
     return redirect("email_planning")
 
 

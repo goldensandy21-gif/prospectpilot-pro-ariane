@@ -283,7 +283,7 @@ def render_predictneed_email(campaign_prospect, email_step=None, email_variant=N
     return subject, html, text
 
 
-def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_variant=None, request=None, is_test=False, test_recipient="", frozen_content=None):
+def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_variant=None, request=None, is_test=False, test_recipient="", frozen_content=None, now=None):
     """ETAPE 22/24/25 — envoi réel, avec re-vérification de l'opposition juste
     avant SMTP, identité d'expéditeur centralisée, Message-ID et List-Unsubscribe.
 
@@ -293,7 +293,13 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
     contenu n'est PAS régénéré ici — c'est exactement le contenu approuvé et
     figé au moment de la validation humaine qui part en SMTP, jamais un
     nouveau rendu silencieux. Sans `frozen_content`, comportement inchangé
-    (rendu live, comme avant cette section)."""
+    (rendu live, comme avant cette section).
+
+    `now` (section 6, retry/backoff) : uniquement utilisé pour calculer
+    `next_retry_at` en cas d'échec, cohérent avec le `now` simulé par
+    advance_campaign_prospect/run_planning_scheduler. Ne change aucun autre
+    horodatage de cette fonction (sent_at, last_attempt_at... restent
+    l'horloge réelle, comme avant cette section)."""
     prospect = campaign_prospect.prospect
     campaign = campaign_prospect.campaign
     product = campaign.product
@@ -396,6 +402,13 @@ def send_predictneed_campaign_email(campaign_prospect, email_step=None, email_va
     except Exception as exc:
         record.status = "failed"
         record.error = str(exc)
+        if not is_test and campaign_prospect.campaign.planning_managed:
+            # Section 6 (correctif automatisation) — backoff réel, jamais
+            # une rafale de tentatives toutes les 5 minutes. Scopé aux
+            # campagnes planning_managed pour ne rien changer au
+            # comportement existant des campagnes manuelles.
+            from .email_automation import finalize_failed_send
+            record = finalize_failed_send(record, campaign_prospect, email_step, now=now)
         record.save()
         if not is_test:
             EngagementEvent.objects.create(

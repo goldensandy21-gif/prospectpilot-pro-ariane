@@ -13,6 +13,7 @@ testable avec un email.message.Message construit à la main. `poll_inbound_repli
 est le seul point qui ouvre une vraie connexion IMAP.
 """
 import email
+import hashlib
 import imaplib
 import os
 import re
@@ -20,7 +21,7 @@ from email.utils import getaddresses
 
 from django.utils import timezone
 
-from ..models import ContactLog, EmailSend, EngagementEvent
+from ..models import ContactLog, EmailSend, EngagementEvent, ProcessedInboundMessage
 
 
 def _imap_settings():
@@ -103,11 +104,35 @@ def process_inbound_message(msg):
     return {"action": "matched", "prospect_id": prospect.pk, "email_send_id": record.pk}
 
 
+def _message_identity(msg):
+    """Identifiant stable pour le registre d'idempotence (section 5,
+    correctif). Utilise l'en-tête Message-ID (unique par construction pour
+    tout email légitime) ; à défaut (message malformé, rare), une empreinte
+    synthétique des en-têtes disponibles pour ne jamais planter."""
+    message_id = (msg.get("Message-ID") or "").strip()
+    if message_id:
+        return message_id
+    fallback_source = f"{msg.get('From', '')}|{msg.get('Subject', '')}|{msg.get('Date', '')}"
+    return "synthetic:" + hashlib.sha256(fallback_source.encode("utf-8")).hexdigest()
+
+
 def poll_inbound_replies():
-    """Seul point de ce module qui ouvre une vraie connexion IMAP (lecture
-    seule : SELECT + SEARCH UNSEEN + FETCH + marquage \\Seen). Ne répond
-    jamais au prospect. Si les identifiants ne sont pas configurés, ne tente
-    aucune connexion — comportement dormant, pas une erreur."""
+    """Seul point de ce module qui ouvre une vraie connexion IMAP.
+
+    Correctif (section 5) : lecture STRICTEMENT sans effet de bord sur
+    l'état \\Seen de la boîte —
+    - `conn.select(mailbox, readonly=True)` : le serveur lui-même refuse
+      toute modification de drapeau pendant la session ;
+    - `FETCH BODY.PEEK[]` (jamais `RFC822`, qui marque implicitement \\Seen
+      sur de nombreux serveurs) ;
+    - aucun `STORE` n'est jamais appelé.
+    L'idempotence vient ENTIÈREMENT du registre applicatif
+    `ProcessedInboundMessage` (clé = Message-ID), jamais de \\Seen/UNSEEN :
+    un même message n'est donc jamais retraité, même après crash/redémarrage
+    ou double polling, et les messages non pertinents ne sont jamais
+    réinspectés indéfiniment. Ne répond jamais au prospect. Si les
+    identifiants ne sont pas configurés, ne tente aucune connexion —
+    comportement dormant, pas une erreur."""
     settings_ = _imap_settings()
     if not settings_["host"] or not settings_["user"] or not settings_["password"]:
         return {"action": "imap_not_configured", "results": []}
@@ -116,18 +141,28 @@ def poll_inbound_replies():
     conn = imaplib.IMAP4_SSL(settings_["host"], settings_["port"])
     try:
         conn.login(settings_["user"], settings_["password"])
-        conn.select(settings_["mailbox"])
-        status, data = conn.search(None, "UNSEEN")
+        conn.select(settings_["mailbox"], readonly=True)
+        status, data = conn.search(None, "ALL")
         if status != "OK":
             return {"action": "search_failed", "results": []}
         for num in data[0].split():
-            fetch_status, msg_data = conn.fetch(num, "(RFC822)")
+            fetch_status, msg_data = conn.fetch(num, "(BODY.PEEK[])")
             if fetch_status != "OK" or not msg_data or not msg_data[0]:
                 continue
             raw_email = msg_data[0][1]
             msg = email.message_from_bytes(raw_email)
-            results.append(process_inbound_message(msg))
-            conn.store(num, "+FLAGS", "\\Seen")
+
+            message_identity = _message_identity(msg)
+            _registry_row, created = ProcessedInboundMessage.objects.get_or_create(message_id=message_identity)
+            if not created:
+                results.append({"action": "already_processed", "message_id": message_identity})
+                continue
+
+            result = process_inbound_message(msg)
+            result["message_id"] = message_identity
+            results.append(result)
+            _registry_row.result = result["action"]
+            _registry_row.save(update_fields=["result"])
     finally:
         try:
             conn.logout()

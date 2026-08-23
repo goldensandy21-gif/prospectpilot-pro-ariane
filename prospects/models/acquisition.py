@@ -888,3 +888,16 @@ class PlannedEmailContent(models.Model):
 
     def __str__(self):
         return f"{self.campaign_prospect} - {self.email_step} ({self.status})"
+
+
+class ProcessedInboundMessage(models.Model):
+    """Section J (correctif) — registre idempotent des messages IMAP déjà
+    inspectés. L'idempotence vient ENTIÈREMENT de cette table, jamais du
+    drapeau \\Seen de la boîte : poll_inbound_replies() ouvre la boîte en
+    lecture seule et ne modifie jamais son état côté serveur."""
+    message_id = models.CharField(max_length=255, unique=True, db_index=True)
+    result = models.CharField(max_length=30, blank=True)
+    processed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.message_id

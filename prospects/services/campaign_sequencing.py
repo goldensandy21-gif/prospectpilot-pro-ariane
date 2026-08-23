@@ -294,7 +294,12 @@ def _execute_step(campaign_prospect, step, now, linkedin_provider):
             # pour le premier contact (une relance J4/J8/J14 de la séquence
             # en cours reste évidemment autorisée). Un bug de sélection en
             # amont ne peut donc jamais produire un doublon réel.
-            from .email_automation import has_prior_commercial_first_contact, is_content_stale
+            from .email_automation import (
+                has_prior_commercial_first_contact,
+                is_content_stale,
+                local_today,
+                smtp_retry_allowed,
+            )
             from ..models import PlannedEmailContent
 
             if step.order == 1 and has_prior_commercial_first_contact(prospect):
@@ -311,12 +316,26 @@ def _execute_step(campaign_prospect, step, now, linkedin_provider):
             ).first()
             if not planned or is_content_stale(planned):
                 return {"action": "blocked_awaiting_validation", "step": step.name}
+
+            # Section 4 (correctif) — scheduled_date est une contrainte
+            # réelle : jamais d'envoi avant la date programmée, même si le
+            # délai brut (delay_days) est par ailleurs écoulé.
+            if planned.scheduled_date > local_today(now):
+                return {"action": "deferred_not_yet_due", "step": step.name}
+
+            # Section 6 (correctif) — backoff : après un échec SMTP pour
+            # cette étape précise, ne retente jamais avant next_retry_at, et
+            # jamais après le nombre maximum de tentatives.
+            allowed, retry_reason = smtp_retry_allowed(campaign_prospect, step, now=now)
+            if not allowed:
+                return {"action": f"blocked_{retry_reason}", "step": step.name}
+
             frozen_content = {
                 "subject": planned.subject, "html_body": planned.html_body,
                 "text_body": planned.text_body, "open_tracking_token": planned.open_tracking_token,
             }
 
-        record = send_predictneed_campaign_email(campaign_prospect, email_step=step, email_variant=variant, frozen_content=frozen_content)
+        record = send_predictneed_campaign_email(campaign_prospect, email_step=step, email_variant=variant, frozen_content=frozen_content, now=now)
 
         # Correctif d'audit (round 3) : ne jamais avancer l'étape comme si
         # l'e-mail avait été envoyé quand ce n'est pas le cas.
