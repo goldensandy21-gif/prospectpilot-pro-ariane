@@ -44,21 +44,21 @@ def render_compliance_footer_text(prospect, product, compliance_profile, unsubsc
 def render_compliance_footer_html(prospect, product, compliance_profile, unsubscribe_url, privacy_url, email=""):
     context_lines = _context_lines(prospect, product, compliance_profile, email)
     paragraphs = "".join(
-        f'<p style="margin:0 0 8px 0;font-size:11px;line-height:1.6;color:#7a8699;">{escape(line)}</p>'
+        f'<p style="margin:0 0 8px 0;font-size:11px;line-height:1.6;color:#6b7686;">{escape(line)}</p>'
         for line in context_lines
     )
     privacy_link = privacy_url or (compliance_profile.privacy_policy_url if compliance_profile else "")
     links = []
     if privacy_link:
-        links.append(f'<a href="{escape(privacy_link)}" style="color:#4a5570;">Confidentialité et vos droits</a>')
-    links.append(f'<a href="{escape(unsubscribe_url)}" style="color:#4a5570;">Se désabonner</a>')
+        links.append(f'<a href="{escape(privacy_link)}" style="color:#2F6FE0;text-decoration:underline;">Confidentialité et vos droits</a>')
+    links.append(f'<a href="{escape(unsubscribe_url)}" style="color:#2F6FE0;text-decoration:underline;">Se désabonner</a>')
     if compliance_profile and compliance_profile.legal_notice_url:
-        links.append(f'<a href="{escape(compliance_profile.legal_notice_url)}" style="color:#4a5570;">Mentions légales</a>')
+        links.append(f'<a href="{escape(compliance_profile.legal_notice_url)}" style="color:#2F6FE0;text-decoration:underline;">Mentions légales</a>')
     links_html = (
-        '<p style="margin:0;font-size:11px;line-height:1.6;color:#7a8699;">' + " · ".join(links) + "</p>"
+        '<p style="margin:0;font-size:11px;line-height:1.6;color:#6b7686;">' + " · ".join(links) + "</p>"
     )
     return (
-        '<tr><td style="padding:18px 28px 24px 28px;border-top:1px solid #e7eaf0;">'
+        '<tr><td style="padding:20px 32px 26px 32px;background:#F4F6F9;border-top:1px solid #E2E6ED;">'
         f"{paragraphs}{links_html}"
         "</td></tr>"
     )

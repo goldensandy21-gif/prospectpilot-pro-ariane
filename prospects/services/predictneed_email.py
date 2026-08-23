@@ -26,6 +26,35 @@ DEFAULT_CTA_LABELS = {
     "reply": "Répondre à cet e-mail",
 }
 
+# Identité visuelle PredictNeed IA — bleu marine dominant, bleu clair en accent,
+# blanc, gris très clair pour le footer. Aucune référence Plezia, aucune photo.
+NAVY = "#0B1F3A"
+ACCENT_BLUE = "#2F6FE0"
+ACCENT_BLUE_SOFT = "#EAF1FE"
+INK = "#1F2530"
+INK_SOFT = "#5B6472"
+BORDER = "#E2E6ED"
+PAGE_BG = "#EEF1F5"
+
+# Trois blocs bénéfices courts, formulés en observations/probabilités,
+# jamais en certitude sur ce qu'un visiteur pense ou veut (voir
+# services/message_guardrails.py::BLOCKED_CLAIM_PATTERNS — aucune de ces
+# phrases fixes n'utilise "vous cherchez", "votre intention", etc.).
+BENEFIT_BLOCKS = [
+    (
+        "Comportements observés & intentions probables",
+        "Identifier les signaux qui peuvent indiquer ce qu'un visiteur semble rechercher.",
+    ),
+    (
+        "Plus de clarté sur les parcours de conversion",
+        "Repérer les étapes et signaux susceptibles d'influencer le passage à l'action.",
+    ),
+    (
+        "Actions recommandées",
+        "Transformer les signaux détectés en prochaines actions marketing ou commerciales.",
+    ),
+]
+
 
 def _render(template_str, ctx):
     return Template(template_str or "").render(Context(ctx)).strip()
@@ -107,6 +136,8 @@ def render_predictneed_text(ctx, product, compliance_profile, prospect, email):
     if ctx["cta_target_url"]:
         body_lines.append(f"{ctx['cta_label']} : {ctx['cta_url']}")
         body_lines.append("")
+    body_lines.append("Vous pouvez aussi simplement répondre à cet e-mail si vous avez une question.")
+    body_lines.append("")
     body_lines.append("Bien cordialement,")
     body_lines.extend(_signature_lines(product))
     body_lines.append("")
@@ -115,49 +146,114 @@ def render_predictneed_text(ctx, product, compliance_profile, prospect, email):
     return "\n".join(body_lines)
 
 
+def _benefit_block_html(title, description):
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px 0;">'
+        '<tr>'
+        '<td width="34" valign="top" style="padding:0 12px 0 0;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0"><tr>'
+        f'<td width="28" height="28" align="center" valign="middle" bgcolor="{ACCENT_BLUE_SOFT}" '
+        f'style="background:{ACCENT_BLUE_SOFT};border-radius:6px;font-family:Arial,Helvetica,sans-serif;'
+        f'font-size:14px;line-height:28px;color:{ACCENT_BLUE};font-weight:700;">→</td>'
+        "</tr></table>"
+        "</td>"
+        '<td valign="top">'
+        f'<p style="margin:0 0 2px 0;font-size:14px;line-height:1.4;font-weight:700;color:{NAVY};">{escape(title)}</p>'
+        f'<p style="margin:0;font-size:13px;line-height:1.55;color:{INK_SOFT};">{escape(description)}</p>'
+        "</td>"
+        "</tr></table>"
+    )
+
+
 def render_predictneed_html(ctx, product, compliance_profile, prospect, email):
     greeting = f"Bonjour {escape(ctx['first_name'])}," if ctx["first_name"] else "Bonjour,"
-    logo_html = ""
-    if product.logo_url:
-        logo_html = f'<img src="{escape(product.logo_url)}" alt="{escape(product.name)}" height="28" style="height:28px;width:auto;display:block;margin-bottom:6px;border:0;">'
 
-    paragraphs = []
+    intro_html = ""
     if ctx["observation"]:
-        paragraphs.append(f"En regardant {escape(ctx['company_name'])}, j'ai remarqué : {escape(ctx['observation'])}.")
-    if ctx["detected_problem"]:
-        paragraphs.append(escape(ctx["detected_problem"]))
-    if ctx["value_proposition"]:
-        paragraphs.append(escape(ctx["value_proposition"]))
+        intro_html = (
+            f'<p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:{INK};">'
+            f'En regardant {escape(ctx["company_name"])}, nous avons observé : {escape(ctx["observation"])}.</p>'
+        )
 
-    body_paragraphs = "".join(
-        f'<p style="margin:0 0 14px 0;font-size:15px;line-height:1.65;color:#1f2530;">{p}</p>' for p in paragraphs
+    # Accroche forte visuellement mise en avant — même donnée réelle que
+    # ctx["detected_problem"] (AgentBrief.detected_need), jamais un texte
+    # inventé pour l'occasion, seulement une mise en forme différente.
+    headline_html = ""
+    if ctx["detected_problem"]:
+        headline_html = (
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">'
+            f'<tr><td style="background:{ACCENT_BLUE_SOFT};border-left:3px solid {ACCENT_BLUE};'
+            f'border-radius:6px;padding:16px 18px;">'
+            f'<p style="margin:0;font-size:15px;line-height:1.6;font-weight:600;color:{NAVY};">'
+            f'{escape(ctx["detected_problem"])}</p>'
+            "</td></tr></table>"
+        )
+
+    value_prop_html = ""
+    if ctx["value_proposition"]:
+        value_prop_html = (
+            f'<p style="margin:0 0 22px 0;font-size:15px;line-height:1.65;color:{INK};">{escape(ctx["value_proposition"])}</p>'
+        )
+
+    benefits_html = "".join(_benefit_block_html(title, desc) for title, desc in BENEFIT_BLOCKS)
+    benefits_section = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="margin:0 0 26px 0;padding:20px 20px 6px 20px;background:#fbfcfe;border:1px solid {BORDER};border-radius:8px;">'
+        f"<tr><td>{benefits_html}</td></tr></table>"
     )
 
     cta_html = ""
     if ctx["cta_target_url"]:
+        cta_url = escape(ctx["cta_url"])
+        cta_label = escape(ctx["cta_label"])
         cta_html = (
-            '<p style="margin:22px 0 0 0;">'
-            f'<a href="{escape(ctx["cta_url"])}" style="display:inline-block;padding:11px 20px;'
-            'background:#1f6feb;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">'
-            f'{escape(ctx["cta_label"])}</a></p>'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px 0;">'
+            '<tr><td align="center">'
+            "<!--[if mso]>"
+            f'<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" '
+            f'href="{cta_url}" style="height:46px;v-text-anchor:middle;width:280px;" arcsize="10%" '
+            f'strokecolor="{ACCENT_BLUE}" fillcolor="{ACCENT_BLUE}">'
+            '<w:anchorlock/>'
+            f'<center style="color:#ffffff;font-family:Arial,sans-serif;font-size:15px;font-weight:bold;">{cta_label}</center>'
+            "</v:roundrect>"
+            "<![endif]-->"
+            "<!--[if !mso]><!-->"
+            f'<a href="{cta_url}" style="background:{ACCENT_BLUE};border-radius:8px;color:#ffffff;'
+            'display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;'
+            'line-height:46px;padding:0 28px;text-align:center;text-decoration:none;-webkit-text-size-adjust:none;'
+            f'mso-hide:all;">{cta_label}</a>'
+            "<!--<![endif]-->"
+            "</td></tr></table>"
         )
+
+    reply_html = (
+        f'<p style="margin:0 0 26px 0;font-size:13px;line-height:1.6;color:{INK_SOFT};">'
+        "Vous pouvez aussi simplement répondre à cet e-mail si vous avez une question.</p>"
+    )
 
     signature_html = "<br>".join(escape(line) for line in _signature_lines(product))
 
     return (
-        '<!doctype html><html lang="fr"><body style="margin:0;background:#f4f5f7;'
-        'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif;color:#1f2530;">'
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;">'
+        '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0"></head>'
+        f'<body style="margin:0;padding:0;background:{PAGE_BG};'
+        f'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif;color:{INK};">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{PAGE_BG};">'
         '<tr><td align="center" style="padding:24px 12px;">'
         '<table role="presentation" width="600" cellpadding="0" cellspacing="0" '
-        'style="width:100%;max-width:600px;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e7eaf0;">'
-        f'<tr><td style="padding:24px 28px 8px 28px;">{logo_html}'
-        f'<div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#8b93a3;font-weight:600;">{escape(product.name)}</div>'
+        'style="width:100%;max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;'
+        f'border:1px solid {BORDER};">'
+        # Bandeau supérieur bleu marine — identité PredictNeed IA, aucune image.
+        f'<tr><td style="background:{NAVY};padding:26px 32px;">'
+        '<span style="font-family:Arial,Helvetica,sans-serif;font-size:14px;letter-spacing:1.5px;'
+        'text-transform:uppercase;color:#ffffff;font-weight:700;">'
+        f'{escape(product.name)}</span>'
         "</td></tr>"
-        f'<tr><td style="padding:8px 28px 4px 28px;">'
-        f'<p style="margin:0 0 14px 0;font-size:15px;line-height:1.65;color:#1f2530;">{greeting}</p>'
-        f"{body_paragraphs}{cta_html}"
-        f'<p style="margin:26px 0 0 0;font-size:14px;line-height:1.6;color:#1f2530;">Bien cordialement,<br>{signature_html}</p>'
+        # Corps blanc.
+        f'<tr><td style="padding:32px 32px 8px 32px;">'
+        f'<p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:{INK};">{greeting}</p>'
+        f"{intro_html}{headline_html}{value_prop_html}{benefits_section}{cta_html}{reply_html}"
+        f'<p style="margin:0 0 6px 0;font-size:14px;line-height:1.6;color:{INK};">Bien cordialement,<br>{signature_html}</p>'
         "</td></tr>"
         f"{render_compliance_footer_html(prospect, product, compliance_profile, ctx['unsubscribe_url'], ctx['privacy_url'], email)}"
         "</table></td></tr></table></body></html>"
