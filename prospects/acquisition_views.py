@@ -845,6 +845,17 @@ def email_planning_content_detail(request, planned_id):
     mark_stale_if_changed(planned)
     planned.refresh_from_db()
 
+    # Correctif (rattrapage manuel « Envoyer maintenant ») : PlannedEmailContent.
+    # status reste "validated" pour toujours après un envoi réel — seul un
+    # EmailSend(is_test=False, status="sent") existant fait foi qu'il est
+    # RÉELLEMENT parti (même logique que email_planning_prepared()). Sans ce
+    # contrôle, le statut affiché ET le bouton « Envoyer maintenant »
+    # resteraient trompeurs sur un email déjà envoyé par le scheduler.
+    was_sent = EmailSend.objects.filter(
+        campaign_prospect_id=planned.campaign_prospect_id, email_step_id=planned.email_step_id,
+        is_test=False, status="sent",
+    ).exists()
+
     if request.method == "POST":
         action = request.POST.get("action")
         from .services.email_automation import (
@@ -904,18 +915,22 @@ def email_planning_content_detail(request, planned_id):
             # maintenant, sans attendre le prochain créneau automatique
             # (09:30-11:00, jours ouvrés). Réservé au contenu déjà
             # Programmé — voir email_automation.send_planned_content_now.
-            result = send_planned_content_now(planned, request.user)
-            if result.get("action") == "email":
-                messages.success(request, "Email envoyé maintenant au prospect.")
+            if was_sent:
+                messages.error(request, "Cet email a déjà été envoyé — aucune action possible.")
             else:
-                reason = result.get("action")
-                messages.error(request, f"Envoi refusé : {SEND_NOW_REASON_LABELS.get(reason, reason)}")
+                result = send_planned_content_now(planned, request.user)
+                if result.get("action") == "email":
+                    messages.success(request, "Email envoyé maintenant au prospect.")
+                else:
+                    reason = result.get("action")
+                    messages.error(request, f"Envoi refusé : {SEND_NOW_REASON_LABELS.get(reason, reason)}")
         return redirect("email_planning_content_detail", planned_id=planned.pk)
 
     return render(request, "prospects/email_planning_content_detail.html", {
         "planned": planned,
         "tested": bool(planned.tested_content_hash and planned.tested_content_hash == planned.content_hash),
-        "display_status": PLANNED_STATUS_DISPLAY.get(planned.status, planned.status),
+        "display_status": _prepared_content_display_status(planned, was_sent),
+        "can_send_now": planned.status == "validated" and not was_sent,
         "test_recipient": settings.EMAIL_HOST_USER or "contact-predict@predictneed-ia.com",
     })
 

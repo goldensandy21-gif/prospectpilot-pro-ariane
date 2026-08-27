@@ -250,6 +250,37 @@ class IndividualDetailSendNowViewTests(TestCase):
         self.assertEqual(len(mail.outbox), outbox_before)
         self.assertEqual(EmailSend.objects.filter(is_test=False).count(), 0)
 
+    def test_send_now_button_hidden_once_actually_sent(self):
+        """PlannedEmailContent.status reste "validated" pour toujours après
+        un envoi réel (aucune transition automatique vers un statut
+        "envoyé") — seul un EmailSend(is_test=False, status="sent")
+        existant fait foi. Sans le contrôle was_sent, le bouton resterait
+        visible (et cliquable) sur un email déjà parti."""
+        ok, reason = validate_planned_content(self.planned, self.user)
+        self.assertTrue(ok, reason)
+        result = send_planned_content_now(self.planned, self.user)
+        self.assertEqual(result["action"], "email")
+        self.planned.refresh_from_db()
+        self.assertEqual(self.planned.status, "validated")  # ne change jamais tout seul
+
+        response = self.client.get(reverse("email_planning_content_detail", args=[self.planned.pk]))
+        content = response.content.decode()
+        self.assertNotIn('value="send_now"', content)
+        self.assertIn("Envoyé", content)
+
+    def test_post_send_now_refused_once_already_sent(self):
+        ok, reason = validate_planned_content(self.planned, self.user)
+        self.assertTrue(ok, reason)
+        send_planned_content_now(self.planned, self.user)
+        sent_count_before = EmailSend.objects.filter(campaign_prospect=self.member, is_test=False, status="sent").count()
+
+        response = self.client.post(reverse("email_planning_content_detail", args=[self.planned.pk]), {"action": "send_now"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            EmailSend.objects.filter(campaign_prospect=self.member, is_test=False, status="sent").count(),
+            sent_count_before,
+        )
+
 
 class BulkSendSelectionNowViewTests(TestCase):
     def setUp(self):
