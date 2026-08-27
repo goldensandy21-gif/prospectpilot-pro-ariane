@@ -743,6 +743,29 @@ PLANNED_STATUS_DISPLAY = {
     "validated": "Programmé",
 }
 
+SEND_NOW_REASON_LABELS = {
+    "not_programmed": "ce contenu n'est pas (ou plus) Programmé.",
+    "deferred_daily_total_limit": "limite globale d'envois du jour déjà atteinte.",
+    "deferred_new_contacts_limit": "limite de nouveaux contacts du jour déjà atteinte.",
+    "not_sendable": "campagne non validée ou non active.",
+    "stopped": "séquence arrêtée pour ce prospect (opposition, perdu, exclu...).",
+    "no_sequence": "aucune séquence active pour cette campagne.",
+    "sequence_complete": "la séquence est déjà terminée pour ce prospect.",
+    "waiting": "ce n'est pas encore l'étape due (délai non écoulé).",
+    "blocked_total_limit": "limite totale d'envois de la campagne atteinte.",
+    "blocked_daily_limit": "limite quotidienne d'envois de la campagne atteinte.",
+    "skipped_domain_already_contacted_today": "un autre contact du même domaine a déjà été contacté aujourd'hui.",
+    "blocked_awaiting_validation": "le contenu de cette étape n'est pas (ou plus) validé.",
+    "deferred_not_yet_due": "la date programmée n'est pas encore atteinte.",
+    "blocked_duplicate_first_contact": "premier contact déjà envoyé pour ce prospect (verrou global anti-doublon).",
+    "blocked_permanent_failure": "échec définitif après plusieurs tentatives — nécessite une intervention.",
+    "blocked_retry_backoff": "un nouvel essai est déjà programmé après un échec récent — pas encore.",
+    "email_suppressed": "opposition détectée juste avant l'envoi — séquence arrêtée.",
+    "email_blocked": "adresse email non exploitable.",
+    "email_failed": "échec technique de l'envoi (SMTP) — nouvel essai possible plus tard.",
+    "unknown_channel": "canal non pris en charge pour cette étape.",
+}
+
 
 def _prepared_content_display_status(planned, was_sent):
     """Workflow final, section 10 — statuts lisibles côté interface.
@@ -824,7 +847,13 @@ def email_planning_content_detail(request, planned_id):
 
     if request.method == "POST":
         action = request.POST.get("action")
-        from .services.email_automation import apply_manual_edit, promote_campaign_after_validation, send_test_email, validate_planned_content
+        from .services.email_automation import (
+            apply_manual_edit,
+            promote_campaign_after_validation,
+            send_planned_content_now,
+            send_test_email,
+            validate_planned_content,
+        )
         from .services.predictneed_email import render_custom_planned_content
 
         if action == "preview":
@@ -870,6 +899,17 @@ def email_planning_content_detail(request, planned_id):
                     "prospect_not_eligible": "ce prospect n'est plus éligible (exclu, en opposition, ou séquence arrêtée).",
                 }
                 messages.error(request, f"Programmation refusée : {REASON_LABELS.get(reason, reason)}")
+        elif action == "send_now":
+            # Correctif UX (rattrapage manuel) — envoie RÉELLEMENT l'email
+            # maintenant, sans attendre le prochain créneau automatique
+            # (09:30-11:00, jours ouvrés). Réservé au contenu déjà
+            # Programmé — voir email_automation.send_planned_content_now.
+            result = send_planned_content_now(planned, request.user)
+            if result.get("action") == "email":
+                messages.success(request, "Email envoyé maintenant au prospect.")
+            else:
+                reason = result.get("action")
+                messages.error(request, f"Envoi refusé : {SEND_NOW_REASON_LABELS.get(reason, reason)}")
         return redirect("email_planning_content_detail", planned_id=planned.pk)
 
     return render(request, "prospects/email_planning_content_detail.html", {
@@ -919,6 +959,45 @@ def email_planning_programmer_selection(request):
     messages.success(request, f"{validated_count} email(s) programmé(s). Aucun email envoyé immédiatement — ils partiront aux dates prévues.")
     if refused_count:
         messages.warning(request, f"{refused_count} email(s) écarté(s) (contenu périmé ou prospect non éligible).")
+    return redirect("email_planning_prepared")
+
+
+@login_required
+def email_planning_send_selection_now(request):
+    """Correctif UX (rattrapage manuel) — envoie RÉELLEMENT, tout de suite,
+    UNIQUEMENT les PlannedEmailContent explicitement cochés qui sont déjà
+    Programmé (status="validated") — jamais « tout » implicitement, et
+    jamais un contenu non encore Programmé (voir send_planned_content_now).
+    Contrairement à email_planning_programmer_selection, cette vue APPELLE
+    RÉELLEMENT SMTP pour chaque ligne éligible — bouton distinct, réservé au
+    rattrapage d'un créneau automatique manqué."""
+    if request.method != "POST":
+        return redirect("email_planning_prepared")
+
+    from .services.email_automation import send_planned_content_now
+
+    planned_ids = request.POST.getlist("planned_ids")
+    if not planned_ids:
+        messages.error(request, "Aucun email sélectionné.")
+        return redirect("email_planning_prepared")
+
+    sent_count = 0
+    refused_count = 0
+    candidates = (
+        PlannedEmailContent.objects.filter(pk__in=planned_ids, campaign_prospect__campaign__planning_managed=True)
+        .exclude(campaign_prospect__campaign__status__in=["paused", "cancelled", "completed"])
+        .select_related("campaign_prospect__campaign")
+    )
+    for planned in candidates:
+        result = send_planned_content_now(planned, request.user)
+        if result.get("action") == "email":
+            sent_count += 1
+        else:
+            refused_count += 1
+
+    messages.success(request, f"{sent_count} email(s) envoyé(s) maintenant.")
+    if refused_count:
+        messages.warning(request, f"{refused_count} email(s) non envoyé(s) (pas Programmé, limite atteinte, ou plus éligible).")
     return redirect("email_planning_prepared")
 
 

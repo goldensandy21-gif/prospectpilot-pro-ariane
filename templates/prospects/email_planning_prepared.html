@@ -8,7 +8,8 @@
     <p>
       Tous les emails préparés pour cette semaine. Ouvre un email pour voir son rendu exact, le modifier si besoin,
       envoyer un test facultatif, ou le programmer. Programmer n'envoie jamais rien immédiatement — le scheduler
-      enverra aux dates prévues, une fois activé.
+      automatique enverra aux dates prévues, tous les jours ouvrés entre 09:30 et 11:00. Pour un email déjà Programmé
+      que ce créneau n'a pas encore pris en charge, « Envoyer maintenant » permet de l'envoyer réellement, à tout moment.
     </p>
   </div>
 </section>
@@ -16,14 +17,15 @@
 
   <div class="cockpit-card">
     {% if rows %}
-    <form method="post" action="{% url 'email_planning_programmer_selection' %}" id="programmer-form"
-          onsubmit="return confirm('Vous allez programmer ' + document.querySelectorAll(&quot;input[name=planned_ids]:checked&quot;).length + ' email(s). Aucun email ne sera envoyé immédiatement. Ils seront envoyés aux dates prévues.');">
+    <form method="post" action="{% url 'email_planning_programmer_selection' %}" id="programmer-form">
       {% csrf_token %}
       <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
         <button type="button" class="btn btn-sm btn-outline-dark" id="select-all-btn">Tout sélectionner</button>
         <button type="button" class="btn btn-sm btn-outline-dark" id="select-none-btn">Tout désélectionner</button>
-        <button type="submit" class="btn btn-primary-custom">Programmer la sélection</button>
-        <span class="text-muted small">Programmer ≠ Envoyer maintenant — c'est une autorisation pour le scheduler, à la date prévue de chaque email.</span>
+        <button type="submit" class="btn btn-primary-custom" id="programmer-selection-btn">Programmer la sélection</button>
+        <button type="submit" class="btn btn-danger" id="send-now-selection-btn"
+                formaction="{% url 'email_planning_send_selection_now' %}">Envoyer la sélection maintenant</button>
+        <span class="text-muted small">Programmer ≠ Envoyer maintenant. « Envoyer la sélection maintenant » envoie RÉELLEMENT, tout de suite, les emails cochés déjà Programmé — rattrapage manuel si le créneau automatique (09:30-11:00, jours ouvrés) a été manqué.</span>
       </div>
 
       <div class="table-responsive">
@@ -92,6 +94,7 @@
   var selectAllCheckbox = document.getElementById('select-all-checkbox');
   var selectAllBtn = document.getElementById('select-all-btn');
   var selectNoneBtn = document.getElementById('select-none-btn');
+  var form = document.getElementById('programmer-form');
   function setAll(checked) {
     document.querySelectorAll('.row-checkbox').forEach(function (cb) { cb.checked = checked; });
     if (selectAllCheckbox) { selectAllCheckbox.checked = checked; }
@@ -99,6 +102,25 @@
   if (selectAllCheckbox) { selectAllCheckbox.addEventListener('change', function () { setAll(this.checked); }); }
   if (selectAllBtn) { selectAllBtn.addEventListener('click', function () { setAll(true); }); }
   if (selectNoneBtn) { selectNoneBtn.addEventListener('click', function () { setAll(false); }); }
+
+  // Deux boutons de soumission distincts partagent ce même formulaire (la
+  // sélection cochée) mais doivent afficher une confirmation différente
+  // selon lequel a été cliqué — event.submitter identifie le bouton réel.
+  if (form) {
+    form.addEventListener('submit', function (event) {
+      var count = document.querySelectorAll('input[name=planned_ids]:checked').length;
+      var submitter = event.submitter;
+      if (submitter && submitter.id === 'send-now-selection-btn') {
+        if (!confirm('Envoyer MAINTENANT ' + count + ' email(s) coché(s) déjà Programmé ? Cette action est IRRÉVERSIBLE : de vrais emails commerciaux partiront immédiatement, sans attendre le créneau automatique.')) {
+          event.preventDefault();
+        }
+      } else {
+        if (!confirm('Vous allez programmer ' + count + ' email(s). Aucun email ne sera envoyé immédiatement. Ils seront envoyés aux dates prévues.')) {
+          event.preventDefault();
+        }
+      }
+    });
+  }
 })();
 </script>
 {% endblock %}

@@ -31,8 +31,22 @@
         <input type="hidden" name="action" value="programmer">
         <button class="btn btn-primary-custom" type="submit">Programmer</button>
       </form>
+      {% if planned.status == 'validated' %}
+      <form method="post" action="{% url 'email_planning_content_detail' planned.pk %}"
+            onsubmit="return confirm('Envoyer CET email MAINTENANT à {{ planned.campaign_prospect.prospect.public_email }} ? Cette action est IRRÉVERSIBLE : un vrai email commercial partira immédiatement, sans attendre le créneau automatique.');">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="send_now">
+        <button class="btn btn-danger">Envoyer maintenant</button>
+      </form>
+      {% endif %}
     </div>
-    <p class="text-muted small mt-2 mb-0">Le test est facultatif — il n'est plus nécessaire pour pouvoir Programmer. Programmer n'envoie rien immédiatement.</p>
+    <p class="text-muted small mt-2 mb-0">
+      Le test est facultatif — il n'est plus nécessaire pour pouvoir Programmer. Programmer n'envoie rien immédiatement : le
+      scheduler automatique enverra aux dates prévues, tous les jours ouvrés entre 09:30 et 11:00.
+      {% if planned.status == 'validated' %}« Envoyer maintenant » est un rattrapage manuel — pour un email déjà Programmé
+      qui n'a pas encore été pris en charge par le créneau automatique, il envoie réellement, tout de suite, à tout
+      moment.{% endif %}
+    </p>
   </div>
 
   <!-- Classe dédiée (jamais « alert ») : static/js/app.js auto-supprime tout

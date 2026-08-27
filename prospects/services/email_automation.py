@@ -796,6 +796,58 @@ def run_planning_scheduler(now=None):
 
 
 # ---------------------------------------------------------------------------
+# G — « Envoyer maintenant » (rattrapage manuel, hors fenêtre/jour ouvré)
+#
+# Correctif UX (mission « reconfigure la partie email préparé ») : la
+# fenêtre horaire 09:30–11:00 et le jour ouvré (is_within_send_window) ne
+# protègent que le déclenchement AUTOMATIQUE (run_planning_scheduler) — un
+# contenu déjà Programmé (status="validated") que l'utilisatrice n'a pas
+# réussi à faire passer par ce créneau (programmé trop tard la veille, par
+# exemple) restait sinon bloqué jusqu'au prochain passage automatique.
+#
+# send_planned_content_now() n'invente aucun second moteur d'envoi : elle
+# appelle directement advance_campaign_prospect() (campaign_sequencing.py),
+# EXACTEMENT le même point d'entrée que le scheduler, qui conserve à lui
+# seul déjà tous les garde-fous par prospect (contenu validé non obsolète,
+# scheduled_date non future, anti-doublon premier contact, DNC/opposition,
+# limites daily_send_limit/total_limit de la CAMPAGNE, politique domaine/
+# jour, retry/backoff SMTP, idempotence par verrouillage — un second appel
+# sur une étape déjà envoyée ne renvoie jamais "email"). Seules deux choses
+# diffèrent délibérément d'un passage automatique :
+#   1) is_within_send_window() n'est PAS vérifiée — un clic humain explicite
+#      remplace ce contrôle automatique (fenêtre horaire ET jour de semaine).
+#   2) EmailAutomationSettings.active n'est PAS vérifiée — ce bouton est une
+#      action manuelle distincte du moteur automatique : le désactiver ne
+#      doit pas empêcher un envoi que l'utilisatrice déclenche elle-même.
+#
+# Les limites quotidiennes GLOBALES (EmailAutomationSettings.daily_total_
+# limit / new_contacts_per_day), elles, restent vérifiées à l'identique —
+# rien dans la demande ne visait ce garde-fou de volume, seulement le
+# blocage horaire.
+# ---------------------------------------------------------------------------
+
+def send_planned_content_now(planned, user, now=None):
+    """« Envoyer maintenant » — renvoie un dict {"action": ..., ...} au même
+    format que advance_campaign_prospect(). "action"=="email" est le seul
+    cas de succès réel (email effectivement envoyé)."""
+    now = now or timezone.now()
+
+    if planned.status != "validated":
+        return {"action": "not_programmed", "step": planned.email_step.name}
+
+    settings_row = EmailAutomationSettings.current()
+    total_sent_today, new_contacts_sent_today = _today_counts(settings_row, now)
+    if total_sent_today >= settings_row.daily_total_limit:
+        return {"action": "deferred_daily_total_limit", "step": planned.email_step.name}
+
+    is_first_contact = planned.campaign_prospect.current_step_id is None
+    if is_first_contact and new_contacts_sent_today >= settings_row.new_contacts_per_day:
+        return {"action": "deferred_new_contacts_limit", "step": planned.email_step.name}
+
+    return advance_campaign_prospect(planned.campaign_prospect_id, now=now)
+
+
+# ---------------------------------------------------------------------------
 # 6 — retry / backoff SMTP
 # ---------------------------------------------------------------------------
 

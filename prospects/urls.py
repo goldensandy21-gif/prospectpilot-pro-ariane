@@ -59,6 +59,7 @@ urlpatterns = [
     path("campaigns/planning/prepared/",acquisition_views.email_planning_prepared,name="email_planning_prepared"),
     path("campaigns/planning/content/<int:planned_id>/",acquisition_views.email_planning_content_detail,name="email_planning_content_detail"),
     path("campaigns/planning/programmer/",acquisition_views.email_planning_programmer_selection,name="email_planning_programmer_selection"),
+    path("campaigns/planning/send-now/",acquisition_views.email_planning_send_selection_now,name="email_planning_send_selection_now"),
     path("campaigns/planning/prospect/<int:cp_id>/preview/",acquisition_views.email_planning_preview,name="email_planning_preview"),
     path("campaigns/planning/prepare/",acquisition_views.email_planning_prepare_week,name="email_planning_prepare_week"),
     path("campaigns/planning/send-tests/",acquisition_views.email_planning_send_tests,name="email_planning_send_tests"),
